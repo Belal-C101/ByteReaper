@@ -6,8 +6,36 @@ import {
   signOut as firebaseSignOut,
   User
 } from 'firebase/auth';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, Timestamp } from 'firebase/firestore';
 import { auth, googleProvider, db } from './firebase';
+
+async function syncUserProfile(user: User, displayNameOverride?: string) {
+  const userRef = doc(db, 'users', user.uid);
+  const existingProfile = await getDoc(userRef);
+  const now = Timestamp.now();
+
+  if (!existingProfile.exists()) {
+    await setDoc(userRef, {
+      uid: user.uid,
+      email: user.email,
+      displayName: displayNameOverride ?? user.displayName,
+      photoURL: user.photoURL ?? null,
+      createdAt: now,
+      lastLogin: now,
+    });
+    return;
+  }
+
+  await setDoc(
+    userRef,
+    {
+      displayName: displayNameOverride ?? user.displayName ?? null,
+      photoURL: user.photoURL ?? null,
+      lastLogin: now,
+    },
+    { merge: true }
+  );
+}
 
 // Sign up with email and password
 export async function signUpWithEmail(email: string, password: string, displayName: string) {
@@ -15,15 +43,12 @@ export async function signUpWithEmail(email: string, password: string, displayNa
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
     const user = userCredential.user;
 
-    // Create user document in Firestore
-    await setDoc(doc(db, 'users', user.uid), {
-      uid: user.uid,
-      email: user.email,
-      displayName: displayName,
-      photoURL: null,
-      createdAt: new Date().toISOString(),
-      lastLogin: new Date().toISOString(),
-    });
+    // Sync user profile without blocking successful auth
+    try {
+      await syncUserProfile(user, displayName);
+    } catch (profileError) {
+      console.error('Failed to sync user profile after sign up:', profileError);
+    }
 
     return user;
   } catch (error: any) {
@@ -35,11 +60,13 @@ export async function signUpWithEmail(email: string, password: string, displayNa
 export async function signInWithEmail(email: string, password: string) {
   try {
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
-    
-    // Update last login
-    await setDoc(doc(db, 'users', userCredential.user.uid), {
-      lastLogin: new Date().toISOString(),
-    }, { merge: true });
+
+    // Sync user profile without blocking successful auth
+    try {
+      await syncUserProfile(userCredential.user);
+    } catch (profileError) {
+      console.error('Failed to sync user profile after sign in:', profileError);
+    }
 
     return userCredential.user;
   } catch (error: any) {
@@ -53,24 +80,11 @@ export async function signInWithGoogle() {
     const result = await signInWithPopup(auth, googleProvider);
     const user = result.user;
 
-    // Check if user document exists
-    const userDoc = await getDoc(doc(db, 'users', user.uid));
-    
-    if (!userDoc.exists()) {
-      // Create user document for new Google users
-      await setDoc(doc(db, 'users', user.uid), {
-        uid: user.uid,
-        email: user.email,
-        displayName: user.displayName,
-        photoURL: user.photoURL,
-        createdAt: new Date().toISOString(),
-        lastLogin: new Date().toISOString(),
-      });
-    } else {
-      // Update last login
-      await setDoc(doc(db, 'users', user.uid), {
-        lastLogin: new Date().toISOString(),
-      }, { merge: true });
+    // Sync user profile without blocking successful auth
+    try {
+      await syncUserProfile(user);
+    } catch (profileError) {
+      console.error('Failed to sync user profile after Google sign in:', profileError);
     }
 
     return user;

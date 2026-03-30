@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { signUpWithEmail, signInWithGoogle } from '@/lib/auth';
+import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
@@ -16,7 +17,14 @@ export default function SignUpPage() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const { user, loading: authLoading } = useAuth();
   const router = useRouter();
+
+  useEffect(() => {
+    if (!authLoading && user) {
+      router.replace('/analyze');
+    }
+  }, [authLoading, user, router]);
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -36,7 +44,9 @@ export default function SignUpPage() {
 
     try {
       await signUpWithEmail(email, password, displayName);
-      router.push('/analyze');
+      setTimeout(() => {
+        router.replace('/analyze');
+      }, 300);
     } catch (err: any) {
       setError(err.message || 'Failed to create account');
     } finally {
@@ -50,7 +60,9 @@ export default function SignUpPage() {
 
     try {
       await signInWithGoogle();
-      router.push('/analyze');
+      setTimeout(() => {
+        router.replace('/analyze');
+      }, 300);
     } catch (err: any) {
       setError(err.message || 'Failed to sign up with Google');
     } finally {

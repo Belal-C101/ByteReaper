@@ -4,14 +4,13 @@ import {
   doc,
   addDoc,
   updateDoc,
-  deleteDoc,
   getDocs,
-  getDoc,
   query,
   where,
   orderBy,
   limit,
   Timestamp,
+  increment,
   writeBatch
 } from 'firebase/firestore';
 import { db } from './firebase';
@@ -22,8 +21,8 @@ export interface ChatSession {
   userId: string;
   title: string;
   model: string;
-  createdAt: string;
-  updatedAt: string;
+  createdAt: Date;
+  updatedAt: Date;
   messageCount: number;
 }
 
@@ -32,15 +31,33 @@ export interface StoredChatMessage extends ChatMessage {
   userId: string;
 }
 
+function parseFirestoreDate(value: unknown): Date {
+  if (value instanceof Timestamp) {
+    return value.toDate();
+  }
+
+  if (value instanceof Date) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+  }
+
+  return new Date();
+}
+
 // Create a new chat session
 export async function createChatSession(userId: string, title: string, model: string): Promise<string> {
   try {
+    const now = Timestamp.now();
     const sessionRef = await addDoc(collection(db, 'chatSessions'), {
       userId,
       title,
       model,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
       messageCount: 0,
     });
     return sessionRef.id;
@@ -61,10 +78,19 @@ export async function getChatSessions(userId: string): Promise<ChatSession[]> {
     );
     
     const querySnapshot = await getDocs(q);
-    return querySnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    } as ChatSession));
+    return querySnapshot.docs.map((sessionDoc) => {
+      const data = sessionDoc.data();
+
+      return {
+        id: sessionDoc.id,
+        userId: data.userId,
+        title: data.title,
+        model: data.model,
+        createdAt: parseFirestoreDate(data.createdAt),
+        updatedAt: parseFirestoreDate(data.updatedAt),
+        messageCount: typeof data.messageCount === 'number' ? data.messageCount : 0,
+      } as ChatSession;
+    });
   } catch (error: any) {
     console.error('Error getting chat sessions:', error);
     return [];
@@ -87,7 +113,7 @@ export async function getSessionMessages(sessionId: string): Promise<ChatMessage
         id: data.id,
         role: data.role,
         content: data.content,
-        timestamp: new Date(data.timestamp),
+        timestamp: parseFirestoreDate(data.timestamp),
         attachments: data.attachments,
         searchResults: data.searchResults,
         isStreaming: false,
@@ -106,6 +132,10 @@ export async function saveMessage(
   message: ChatMessage
 ): Promise<void> {
   try {
+    const messageDate = message.timestamp instanceof Date
+      ? message.timestamp
+      : new Date(message.timestamp);
+
     // Save the message
     await addDoc(collection(db, 'chatMessages'), {
       sessionId,
@@ -113,22 +143,16 @@ export async function saveMessage(
       id: message.id,
       role: message.role,
       content: message.content,
-      timestamp: message.timestamp.toISOString(),
+      timestamp: Timestamp.fromDate(messageDate),
       attachments: message.attachments || null,
       searchResults: message.searchResults || null,
     });
 
     // Update session's updatedAt and message count
-    const sessionRef = doc(db, 'chatSessions', sessionId);
-    const sessionDoc = await getDoc(sessionRef);
-    
-    if (sessionDoc.exists()) {
-      const currentCount = sessionDoc.data().messageCount || 0;
-      await updateDoc(sessionRef, {
-        updatedAt: new Date().toISOString(),
-        messageCount: currentCount + 1,
-      });
-    }
+    await updateDoc(doc(db, 'chatSessions', sessionId), {
+      updatedAt: Timestamp.now(),
+      messageCount: increment(1),
+    });
   } catch (error: any) {
     console.error('Error saving message:', error);
     throw new Error('Failed to save message');
@@ -165,7 +189,7 @@ export async function updateSessionTitle(sessionId: string, title: string): Prom
   try {
     await updateDoc(doc(db, 'chatSessions', sessionId), {
       title,
-      updatedAt: new Date().toISOString(),
+      updatedAt: Timestamp.now(),
     });
   } catch (error: any) {
     console.error('Error updating session title:', error);

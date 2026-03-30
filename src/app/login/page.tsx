@@ -23,10 +23,13 @@ export default function LoginPage() {
 
     try {
       await signInWithEmail(email, password);
-      router.push('/analyze');
+      // Wait a moment for auth state to propagate
+      setTimeout(() => {
+        router.push('/analyze');
+        router.refresh();
+      }, 500);
     } catch (err: any) {
       setError(err.message || 'Failed to sign in');
-    } finally {
       setLoading(false);
     }
   };
@@ -37,10 +40,13 @@ export default function LoginPage() {
 
     try {
       await signInWithGoogle();
-      router.push('/analyze');
+      // Wait a moment for auth state to propagate
+      setTimeout(() => {
+        router.push('/analyze');
+        router.refresh();
+      }, 500);
     } catch (err: any) {
       setError(err.message || 'Failed to sign in with Google');
-    } finally {
       setLoading(false);
     }
   };

@@ -9,7 +9,8 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { ChatMessage, FileAttachment, SearchResult } from "@/types/chat";
 import { useAuth } from "@/contexts/AuthContext";
-import { createChatSession, saveMessage } from "@/lib/chat-history";
+import { createChatSession, saveMessage, getSessionMessages } from "@/lib/chat-history";
+import { ChatSidebar } from "./chat-sidebar";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -144,15 +145,105 @@ What would you like help with today?`,
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [selectedModel, setSelectedModel] = useState<ModelKey>('auto');
-  
+
   // Create chat session when component mounts
   useEffect(() => {
     if (user && !sessionId) {
       createChatSession(user.uid, 'New Chat', 'auto')
-        .then(id => setSessionId(id))
+        .then(id => {
+          setSessionId(id);
+
+          // Check for initial prompt from home page
+          if (typeof window !== 'undefined') {
+            const initialPrompt = sessionStorage.getItem('initialPrompt');
+            if (initialPrompt) {
+              sessionStorage.removeItem('initialPrompt');
+              setInput(initialPrompt);
+            }
+          }
+        })
         .catch(err => console.error('Failed to create session:', err));
     }
   }, [user, sessionId]);
+
+  // Load messages when session changes
+  const loadSessionMessages = useCallback(async (sid: string) => {
+    try {
+      const sessionMessages = await getSessionMessages(sid);
+      if (sessionMessages.length > 0) {
+        setMessages(sessionMessages);
+      } else {
+        // Show welcome message if session is empty
+        setMessages([{
+          id: 'welcome',
+          role: 'assistant',
+          content: `# 👋 Welcome to ByteReaper!
+
+I'm your AI developer assistant. I can help you with:
+
+- 🔍 **Code Analysis** - Review your code for bugs, security issues, and improvements
+- 📁 **File Analysis** - Upload code files and I'll analyze them
+- 🌐 **Web Search** - Search for documentation, tutorials, or solutions
+- 📊 **GitHub Analysis** - Analyze public repositories
+- 💡 **Code Explanation** - Understand how code works
+- 🐛 **Debugging** - Help identify and fix bugs
+
+**Try these commands:**
+- "Analyze this code: [paste code]"
+- "Search for React hooks tutorial"
+- "Analyze github.com/facebook/react"
+- Or just upload a file and ask me to review it!
+
+What would you like help with today?`,
+          timestamp: new Date(),
+        }]);
+      }
+    } catch (error) {
+      console.error('Failed to load messages:', error);
+    }
+  }, []);
+
+  // Handle session selection from sidebar
+  const handleSessionSelect = useCallback((sid: string) => {
+    setSessionId(sid);
+    loadSessionMessages(sid);
+  }, [loadSessionMessages]);
+
+  // Handle new chat creation
+  const handleNewChat = useCallback(() => {
+    if (user) {
+      createChatSession(user.uid, 'New Chat', 'auto')
+        .then(id => {
+          setSessionId(id);
+          setMessages([{
+            id: 'welcome',
+            role: 'assistant',
+            content: `# 👋 Welcome to ByteReaper!
+
+I'm your AI developer assistant. I can help you with:
+
+- 🔍 **Code Analysis** - Review your code for bugs, security issues, and improvements
+- 📁 **File Analysis** - Upload code files and I'll analyze them
+- 🌐 **Web Search** - Search for documentation, tutorials, or solutions
+- 📊 **GitHub Analysis** - Analyze public repositories
+- 💡 **Code Explanation** - Understand how code works
+- 🐛 **Debugging** - Help identify and fix bugs
+
+**Try these commands:**
+- "Analyze this code: [paste code]"
+- "Search for React hooks tutorial"
+- "Analyze github.com/facebook/react"
+- Or just upload a file and ask me to review it!
+
+What would you like help with today?`,
+            timestamp: new Date(),
+          }]);
+          setInput("");
+          setAttachments([]);
+        })
+        .catch(err => console.error('Failed to create session:', err));
+    }
+  }, [user]);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -299,20 +390,21 @@ What would you like help with today?`,
       }
 
       // Mark as complete and save to Firestore
-      const assistantMessage = messages.find(m => m.id === assistantId);
-      setMessages(prev => prev.map(m => 
-        m.id === assistantId 
-          ? { ...m, isStreaming: false }
+      setMessages(prev => prev.map(m =>
+        m.id === assistantId
+          ? { ...m, content: fullContent, isStreaming: false }
           : m
       ));
 
       // Save both messages to Firestore
-      if (user && sessionId && assistantMessage) {
+      if (user && sessionId) {
         try {
           await saveMessage(sessionId, user.uid, userMessage);
           await saveMessage(sessionId, user.uid, {
-            ...assistantMessage,
-            isStreaming: false
+            id: assistantId,
+            role: 'assistant',
+            content: fullContent,
+            timestamp: new Date(),
           });
         } catch (err) {
           console.error('Failed to save messages:', err);
@@ -345,94 +437,104 @@ What would you like help with today?`,
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-8rem)] max-w-5xl mx-auto">
-      {/* Messages Area */}
-      <div 
-        className="flex-1 overflow-y-auto p-4 space-y-4"
-        onDrop={handleDrop}
-        onDragOver={(e) => e.preventDefault()}
-      >
-        {messages.map((message) => (
-          <MessageBubble key={message.id} message={message} />
-        ))}
-        <div ref={messagesEndRef} />
-      </div>
+    <div className="flex h-[calc(100vh-8rem)] max-w-7xl mx-auto">
+      {/* Chat Sidebar */}
+      <ChatSidebar
+        currentSessionId={sessionId}
+        onSessionSelect={handleSessionSelect}
+        onNewChat={handleNewChat}
+      />
 
-      {/* Attachments Preview */}
-      {attachments.length > 0 && (
-        <div className="px-4 py-2 flex flex-wrap gap-2 border-t">
-          {attachments.map((att) => (
-            <div 
-              key={att.id}
-              className="flex items-center gap-2 px-3 py-1.5 bg-secondary rounded-lg text-sm"
-            >
-              <FileIcon type={getFileType({ name: att.name } as File)} />
-              <span className="max-w-[150px] truncate">{att.name}</span>
-              <button 
-                onClick={() => removeAttachment(att.id)}
-                className="hover:text-destructive"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
+      {/* Main Chat Area */}
+      <div className="flex flex-col flex-1">
+        {/* Messages Area */}
+        <div
+          className="flex-1 overflow-y-auto p-4 space-y-4"
+          onDrop={handleDrop}
+          onDragOver={(e) => e.preventDefault()}
+        >
+          {messages.map((message) => (
+            <MessageBubble key={message.id} message={message} />
           ))}
-        </div>
-      )}
-
-      {/* Input Area */}
-      <div className="p-4 border-t">
-        <div className="flex gap-2 items-end">
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            className="hidden"
-            onChange={(e) => e.target.files && handleFileUpload(e.target.files)}
-          />
-          
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isLoading}
-            title="Attach files"
-          >
-            <Paperclip className="h-5 w-5" />
-          </Button>
-
-          <Textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Ask me anything... (Shift+Enter for new line)"
-            className="flex-1 min-h-[44px] max-h-[200px] resize-none"
-            disabled={isLoading}
-            rows={1}
-          />
-
-          <Button
-            onClick={sendMessage}
-            disabled={isLoading || (!input.trim() && attachments.length === 0)}
-            className="h-11"
-          >
-            {isLoading ? (
-              <Loader2 className="h-5 w-5 animate-spin" />
-            ) : (
-              <Send className="h-5 w-5" />
-            )}
-          </Button>
+          <div ref={messagesEndRef} />
         </div>
 
-        <div className="flex items-center justify-between mt-3">
-          <ModelSelector 
-            selectedModel={selectedModel} 
-            onSelect={setSelectedModel}
-            disabled={isLoading}
-          />
-          <p className="text-xs text-muted-foreground">
-            Drag & drop files • Type "search" to search the web
-          </p>
+        {/* Attachments Preview */}
+        {attachments.length > 0 && (
+          <div className="px-4 py-2 flex flex-wrap gap-2 border-t">
+            {attachments.map((att) => (
+              <div
+                key={att.id}
+                className="flex items-center gap-2 px-3 py-1.5 bg-secondary rounded-lg text-sm"
+              >
+                <FileIcon type={getFileType({ name: att.name } as File)} />
+                <span className="max-w-[150px] truncate">{att.name}</span>
+                <button
+                  onClick={() => removeAttachment(att.id)}
+                  className="hover:text-destructive"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Input Area */}
+        <div className="p-4 border-t">
+          <div className="flex gap-2 items-end">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => e.target.files && handleFileUpload(e.target.files)}
+            />
+
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isLoading}
+              title="Attach files"
+            >
+              <Paperclip className="h-5 w-5" />
+            </Button>
+
+            <Textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Ask me anything... (Shift+Enter for new line)"
+              className="flex-1 min-h-[44px] max-h-[200px] resize-none"
+              disabled={isLoading}
+              rows={1}
+            />
+
+            <Button
+              onClick={sendMessage}
+              disabled={isLoading || (!input.trim() && attachments.length === 0)}
+              className="h-11"
+            >
+              {isLoading ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <Send className="h-5 w-5" />
+              )}
+            </Button>
+          </div>
+
+          <div className="flex items-center justify-between mt-3">
+            <ModelSelector
+              selectedModel={selectedModel}
+              onSelect={setSelectedModel}
+              disabled={isLoading}
+            />
+            <p className="text-xs text-muted-foreground">
+              Drag & drop files • Type "search" to search the web
+            </p>
+          </div>
         </div>
       </div>
     </div>

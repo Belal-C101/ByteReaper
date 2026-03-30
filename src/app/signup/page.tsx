@@ -36,10 +36,13 @@ export default function SignUpPage() {
 
     try {
       await signUpWithEmail(email, password, displayName);
-      router.push('/analyze');
+      // Wait a moment for auth state to propagate
+      setTimeout(() => {
+        router.push('/analyze');
+        router.refresh();
+      }, 500);
     } catch (err: any) {
       setError(err.message || 'Failed to create account');
-    } finally {
       setLoading(false);
     }
   };
@@ -50,10 +53,13 @@ export default function SignUpPage() {
 
     try {
       await signInWithGoogle();
-      router.push('/analyze');
+      // Wait a moment for auth state to propagate
+      setTimeout(() => {
+        router.push('/analyze');
+        router.refresh();
+      }, 500);
     } catch (err: any) {
       setError(err.message || 'Failed to sign up with Google');
-    } finally {
       setLoading(false);
     }
   };

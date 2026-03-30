@@ -898,7 +898,7 @@ function EmptyChatState({
     <div className="h-full flex items-center justify-center px-4">
       <div className="w-full max-w-3xl text-center space-y-6">
         <h2 className="text-3xl md:text-5xl font-semibold tracking-tight text-foreground/90">
-          <span className="text-primary mr-2">✶</span>
+          {/* <span className="text-primary mr-2">✶</span> */}
           {getDayGreeting()}, {friendlyName}
         </h2>
 

@@ -3,10 +3,24 @@
 import Link from "next/link";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
-import { Skull, Moon, Sun, Github, MessageSquare } from "lucide-react";
+import { Skull, Moon, Sun, Github, MessageSquare, LogOut, User as UserIcon } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+import { signOut } from "@/lib/auth";
+import { useRouter } from "next/navigation";
 
 export function Navbar() {
   const { theme, setTheme } = useTheme();
+  const { user } = useAuth();
+  const router = useRouter();
+
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+      router.push('/');
+    } catch (error) {
+      console.error('Sign out error:', error);
+    }
+  };
 
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -21,12 +35,44 @@ export function Navbar() {
 
         {/* Navigation */}
         <nav className="flex items-center gap-2">
-          <Link href="/analyze">
-            <Button variant="ghost" size="sm" className="gap-2">
-              <MessageSquare className="h-4 w-4" />
-              <span className="hidden sm:inline">Chat</span>
-            </Button>
-          </Link>
+          {user ? (
+            <>
+              <Link href="/analyze">
+                <Button variant="ghost" size="sm" className="gap-2">
+                  <MessageSquare className="h-4 w-4" />
+                  <span className="hidden sm:inline">Chat</span>
+                </Button>
+              </Link>
+
+              <div className="flex items-center gap-2 px-2">
+                <UserIcon className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm hidden md:inline">{user.email}</span>
+              </div>
+
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleSignOut}
+                className="gap-2"
+              >
+                <LogOut className="h-4 w-4" />
+                <span className="hidden sm:inline">Sign Out</span>
+              </Button>
+            </>
+          ) : (
+            <>
+              <Link href="/login">
+                <Button variant="ghost" size="sm">
+                  Login
+                </Button>
+              </Link>
+              <Link href="/signup">
+                <Button variant="default" size="sm">
+                  Sign Up
+                </Button>
+              </Link>
+            </>
+          )}
           
           <Button
             variant="ghost"

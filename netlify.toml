@@ -1,0 +1,48 @@
+# Netlify Configuration for ByteReaper
+# Deploy to: bytereaper.netlify.app
+
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+# Next.js specific configuration
+[build.environment]
+  NODE_VERSION = "18"
+  NPM_VERSION = "9"
+
+# Redirect all server requests to Next.js
+[[redirects]]
+  from = "/*"
+  to = "/.netlify/functions/___netlify-handler"
+  status = 200
+  force = false
+
+# Headers for security and performance
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-XSS-Protection = "1; mode=block"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+
+# Cache static assets
+[[headers]]
+  for = "/_next/static/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/images/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# Enable Next.js Image Optimization
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# Function settings for API routes
+[functions]
+  node_bundler = "esbuild"
+  external_node_modules = ["firebase", "firebase-admin"]

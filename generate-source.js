@@ -2155,7 +2155,7 @@ export function AnalyzeForm() {
                 <Github className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
                 <Input
                   type="text"
-                  placeholder="https://github.com/Belal-C101/ByteReaper"
+                  placeholder="https://github.com/owner/repo"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   className="pl-10"

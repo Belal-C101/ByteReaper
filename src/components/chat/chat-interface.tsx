@@ -8,6 +8,8 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { ChatMessage, FileAttachment, SearchResult } from "@/types/chat";
+import { useAuth } from "@/contexts/AuthContext";
+import { createChatSession, saveMessage } from "@/lib/chat-history";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -110,6 +112,8 @@ function ModelSelector({
 }
 
 export function ChatInterface() {
+  const { user } = useAuth();
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 'welcome',
@@ -140,6 +144,15 @@ What would you like help with today?`,
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [selectedModel, setSelectedModel] = useState<ModelKey>('auto');
+  
+  // Create chat session when component mounts
+  useEffect(() => {
+    if (user && !sessionId) {
+      createChatSession(user.uid, 'New Chat', 'auto')
+        .then(id => setSessionId(id))
+        .catch(err => console.error('Failed to create session:', err));
+    }
+  }, [user, sessionId]);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -285,12 +298,26 @@ What would you like help with today?`,
         }
       }
 
-      // Mark as complete
+      // Mark as complete and save to Firestore
+      const assistantMessage = messages.find(m => m.id === assistantId);
       setMessages(prev => prev.map(m => 
         m.id === assistantId 
           ? { ...m, isStreaming: false }
           : m
       ));
+
+      // Save both messages to Firestore
+      if (user && sessionId && assistantMessage) {
+        try {
+          await saveMessage(sessionId, user.uid, userMessage);
+          await saveMessage(sessionId, user.uid, {
+            ...assistantMessage,
+            isStreaming: false
+          });
+        } catch (err) {
+          console.error('Failed to save messages:', err);
+        }
+      }
     } catch (error) {
       console.error('Chat error:', error);
       setMessages(prev => prev.map(m => 

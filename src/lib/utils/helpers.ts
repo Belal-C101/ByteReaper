@@ -1,14 +1,34 @@
 export function parseGitHubUrl(url: string): { owner: string; repo: string } | null {
+  // Clean up the URL
+  let cleaned = url.trim()
+    .replace(/\/+$/, '')  // Remove trailing slashes
+    .replace(/^(https?:\/\/)?(www\.)?/, ''); // Remove protocol and www
+
+  // Handle URLs with tree/branch paths like github.com/owner/repo/tree/main/folder
+  cleaned = cleaned.replace(/\/tree\/[^\/]+.*$/, '');
+  cleaned = cleaned.replace(/\/blob\/[^\/]+.*$/, '');
+  cleaned = cleaned.replace(/\/pull\/\d+.*$/, '');
+  cleaned = cleaned.replace(/\/issues\/\d+.*$/, '');
+  cleaned = cleaned.replace(/\/commits?\/.*$/, '');
+  
   const patterns = [
-    /^https?:\/\/github\.com\/([^\/]+)\/([^\/]+?)(?:\.git)?(?:\/.*)?$/,
+    // github.com/owner/repo
+    /^github\.com\/([^\/]+)\/([^\/]+?)(?:\.git)?$/,
+    // git@github.com:owner/repo
     /^git@github\.com:([^\/]+)\/([^\/]+?)(?:\.git)?$/,
-    /^([^\/]+)\/([^\/]+)$/,
+    // owner/repo
+    /^([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)$/,
   ];
 
   for (const pattern of patterns) {
-    const match = url.trim().match(pattern);
+    const match = cleaned.match(pattern);
     if (match) {
-      return { owner: match[1], repo: match[2].replace(/\.git$/, '') };
+      const owner = match[1];
+      const repo = match[2].replace(/\.git$/, '');
+      // Validate - owner and repo should be valid GitHub names
+      if (owner && repo && !owner.includes('.') && owner.length <= 39 && repo.length <= 100) {
+        return { owner, repo };
+      }
     }
   }
   return null;

@@ -18,7 +18,7 @@ export async function POST(request: NextRequest) {
       const parsed = parseGitHubUrl(url);
       if (!parsed) {
         return NextResponse.json(
-          { error: "Invalid GitHub URL" },
+          { error: "Invalid GitHub URL. Please use format: github.com/owner/repo" },
           { status: 400 }
         );
       }
@@ -33,11 +33,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    console.log(`Starting analysis for ${repoOwner}/${repoName}`);
+
     // Perform analysis
     const result = await analyzeRepository(repoOwner, repoName);
 
     // Save to database
     saveReport(result);
+
+    console.log(`Analysis complete for ${repoOwner}/${repoName}, score: ${result.scores.overall}`);
 
     return NextResponse.json({
       success: true,
@@ -48,8 +52,28 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("Analysis error:", error);
     
-    const message = error instanceof Error ? error.message : "Analysis failed";
-    const status = message.includes("not found") ? 404 : 500;
+    let message = "Analysis failed. Please try again.";
+    let status = 500;
+
+    if (error instanceof Error) {
+      const errorMsg = error.message.toLowerCase();
+      
+      if (errorMsg.includes("not found") || errorMsg.includes("404")) {
+        message = "Repository not found. Make sure it exists and is public.";
+        status = 404;
+      } else if (errorMsg.includes("rate limit")) {
+        message = "GitHub API rate limit exceeded. Please try again in a few minutes.";
+        status = 429;
+      } else if (errorMsg.includes("gemini") || errorMsg.includes("api key")) {
+        message = "AI service unavailable. Please check your API configuration.";
+        status = 503;
+      } else if (errorMsg.includes("timeout")) {
+        message = "Analysis timed out. The repository might be too large.";
+        status = 408;
+      } else {
+        message = error.message;
+      }
+    }
 
     return NextResponse.json({ error: message }, { status });
   }

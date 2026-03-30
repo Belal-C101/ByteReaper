@@ -4,36 +4,46 @@ import { GitHubRepo, GitHubFile } from '@/types/github';
 export async function fetchRepository(owner: string, repo: string): Promise<GitHubRepo> {
   const octokit = getOctokit();
   
-  const [repoData, languagesData] = await Promise.all([
-    octokit.repos.get({ owner, repo }),
-    octokit.repos.listLanguages({ owner, repo }),
-  ]);
+  try {
+    const [repoData, languagesData] = await Promise.all([
+      octokit.repos.get({ owner, repo }),
+      octokit.repos.listLanguages({ owner, repo }),
+    ]);
 
-  const r = repoData.data;
-  
-  return {
-    owner: r.owner.login,
-    name: r.name,
-    fullName: r.full_name,
-    description: r.description,
-    url: r.html_url,
-    stars: r.stargazers_count,
-    forks: r.forks_count,
-    watchers: r.watchers_count,
-    language: r.language,
-    languages: languagesData.data,
-    topics: r.topics || [],
-    defaultBranch: r.default_branch,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
-    pushedAt: r.pushed_at,
-    size: r.size,
-    openIssues: r.open_issues_count,
-    license: r.license?.spdx_id || null,
-    isPrivate: r.private,
-    hasReadme: true, // Will be checked separately
-    hasLicense: !!r.license,
-  };
+    const r = repoData.data;
+    
+    return {
+      owner: r.owner.login,
+      name: r.name,
+      fullName: r.full_name,
+      description: r.description,
+      url: r.html_url,
+      stars: r.stargazers_count,
+      forks: r.forks_count,
+      watchers: r.watchers_count,
+      language: r.language,
+      languages: languagesData.data,
+      topics: r.topics || [],
+      defaultBranch: r.default_branch,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+      pushedAt: r.pushed_at,
+      size: r.size,
+      openIssues: r.open_issues_count,
+      license: r.license?.spdx_id || null,
+      isPrivate: r.private,
+      hasReadme: true, // Will be checked separately
+      hasLicense: !!r.license,
+    };
+  } catch (error: any) {
+    if (error.status === 404) {
+      throw new Error(`Repository ${owner}/${repo} not found. Make sure it exists and is public.`);
+    }
+    if (error.status === 403) {
+      throw new Error('GitHub API rate limit exceeded. Please try again later or add a GITHUB_TOKEN.');
+    }
+    throw error;
+  }
 }
 
 export async function fetchRepositoryTree(
@@ -43,24 +53,29 @@ export async function fetchRepositoryTree(
 ): Promise<GitHubFile[]> {
   const octokit = getOctokit();
   
-  const { data } = await octokit.git.getTree({
-    owner,
-    repo,
-    tree_sha: branch,
-    recursive: 'true',
-  });
+  try {
+    const { data } = await octokit.git.getTree({
+      owner,
+      repo,
+      tree_sha: branch,
+      recursive: 'true',
+    });
 
-  return data.tree
-    .filter((item): item is typeof item & { path: string; type: 'blob' | 'tree' } => 
-      !!item.path && (item.type === 'blob' || item.type === 'tree')
-    )
-    .map((item) => ({
-      path: item.path,
-      name: item.path.split('/').pop() || item.path,
-      type: item.type === 'blob' ? 'file' : 'dir',
-      size: item.size || 0,
-      sha: item.sha || '',
-    }));
+    return data.tree
+      .filter((item): item is typeof item & { path: string; type: 'blob' | 'tree' } => 
+        !!item.path && (item.type === 'blob' || item.type === 'tree')
+      )
+      .map((item) => ({
+        path: item.path,
+        name: item.path.split('/').pop() || item.path,
+        type: item.type === 'blob' ? 'file' : 'dir',
+        size: item.size || 0,
+        sha: item.sha || '',
+      }));
+  } catch (error: any) {
+    console.error('Error fetching tree:', error);
+    throw new Error(`Failed to fetch repository structure: ${error.message}`);
+  }
 }
 
 export async function fetchFileContent(
@@ -82,7 +97,7 @@ export async function fetchFileContent(
     }
     return null;
   } catch (error) {
-    console.error(`Error fetching file ${path}:`, error);
+    // Silent fail for individual files - they may be too large or binary
     return null;
   }
 }

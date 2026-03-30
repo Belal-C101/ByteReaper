@@ -7,11 +7,11 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?style=for-the-badge&logo=typescript)
 ![OpenRouter](https://img.shields.io/badge/OpenRouter-AI-green?style=for-the-badge)
 ![Firebase](https://img.shields.io/badge/Firebase-Auth-orange?style=for-the-badge&logo=firebase)
-[![Netlify Status](https://img.shields.io/badge/Netlify-Ready-00C7B7?style=for-the-badge&logo=netlify)](https://bytereaper.netlify.app)
+[![Netlify Status](https://img.shields.io/badge/Netlify-Ready-00C7B7?style=for-the-badge&logo=netlify)](https://bytereaber.netlify.app)
 
 **Your AI-powered developer companion. Chat with multiple AI models, analyze code, search the web, and review repositories.**
 
-[Live Demo](https://bytereaper.netlify.app) • [Features](#features) • [Getting Started](#getting-started) • [Deploy](#deployment)
+[Live Demo](https://bytereaber.netlify.app) • [Features](#features) • [Getting Started](#getting-started) • [Deploy](#deployment)
 
 </div>
 

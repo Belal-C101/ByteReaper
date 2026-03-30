@@ -116,7 +116,7 @@ if (allChecks) {
   console.log('     - GITHUB_TOKEN (optional)');
   console.log('  4. Add your Netlify URL to Firebase authorized domains');
   console.log('  5. Deploy!');
-  console.log('\n🚀 Your app will be live at: bytereaper.netlify.app\n');
+  console.log('\n🚀 Your app will be live at: bytereaber.netlify.app\n');
   process.exit(0);
 } else {
   console.log('❌ Some checks failed! Please fix the issues above.');

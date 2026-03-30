@@ -1,4 +1,6 @@
 import Image from "next/image";
+import { Linkedin } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 export function Footer() {
   return (
@@ -17,12 +19,14 @@ export function Footer() {
           </span>
         </div>
         <a
-          href="https://github.com/Belal-C101/ByteReaper"
+          href="https://www.linkedin.com/in/belal-hegab"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+          aria-label="Belal Hegab LinkedIn"
         >
-          github.com/Belal-C101/ByteReaper
+          <Button variant="ghost" size="icon">
+            <Linkedin className="h-5 w-5" />
+          </Button>
         </a>
       </div>
     </footer>

@@ -9,15 +9,32 @@ import {
 import { doc, setDoc, getDoc, Timestamp } from 'firebase/firestore';
 import { auth, googleProvider, db } from './firebase';
 
+function getUserProfileDocId(user: User): string {
+  const email = user.email?.trim();
+
+  if (!email) {
+    throw new Error('Authenticated user does not have an email address.');
+  }
+
+  return email;
+}
+
 async function syncUserProfile(user: User, displayNameOverride?: string) {
-  const userRef = doc(db, 'users', user.uid);
+  const userEmail = user.email?.trim();
+  if (!userEmail) {
+    throw new Error('Authenticated user does not have an email address.');
+  }
+
+  const userDocId = getUserProfileDocId(user);
+  const userRef = doc(db, 'users', userDocId);
   const existingProfile = await getDoc(userRef);
   const now = Timestamp.now();
 
   if (!existingProfile.exists()) {
     await setDoc(userRef, {
       uid: user.uid,
-      email: user.email,
+      email: userEmail,
+      emailDocId: userDocId,
       displayName: displayNameOverride ?? user.displayName,
       photoURL: user.photoURL ?? null,
       createdAt: now,
@@ -29,6 +46,9 @@ async function syncUserProfile(user: User, displayNameOverride?: string) {
   await setDoc(
     userRef,
     {
+      uid: user.uid,
+      email: userEmail,
+      emailDocId: userDocId,
       displayName: displayNameOverride ?? user.displayName ?? null,
       photoURL: user.photoURL ?? null,
       lastLogin: now,

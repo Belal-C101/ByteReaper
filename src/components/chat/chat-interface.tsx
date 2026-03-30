@@ -245,6 +245,7 @@ export function ChatInterface() {
       setIsHistoryLoading(true);
 
       try {
+        await user.getIdToken();
         let fetchedSessions = await getChatSessions(user.uid);
 
         if (fetchedSessions.length === 0) {
@@ -356,6 +357,7 @@ export function ChatInterface() {
     setChatError(null);
 
     try {
+      await user.getIdToken();
       const createdSessionId = await createChatSession(user.uid, "New Chat", selectedModel);
       setSessionId(createdSessionId);
       setMessages([]);
@@ -431,6 +433,13 @@ export function ChatInterface() {
     if ((!input.trim() && attachments.length === 0) || isLoading || !user) return;
 
     setChatError(null);
+
+    try {
+      await user.getIdToken();
+    } catch (tokenError) {
+      setChatError(getErrorMessage(tokenError, "Your session expired. Please sign in again."));
+      return;
+    }
 
     let activeSessionId = sessionId;
     let canPersistToFirestore = true;

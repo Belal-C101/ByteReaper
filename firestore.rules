@@ -21,16 +21,28 @@ service cloud.firestore {
     function isOwner(userId) {
       return isAuthenticated() && request.auth.uid == userId;
     }
+
+    // Helper to check if authenticated user has an email claim
+    function hasAuthEmail() {
+      return isAuthenticated() && request.auth.token.email is string;
+    }
+
+    // Helper to check if user owns an email-keyed document
+    function isEmailOwner(emailId) {
+      return hasAuthEmail() && request.auth.token.email == emailId;
+    }
     
-    // Users collection - users can only read/write their own profile
-    match /users/{userId} {
-      allow read: if isOwner(userId);
-      allow create: if isOwner(userId) && 
-                      request.resource.data.uid == userId &&
-                      request.resource.data.email is string &&
+    // Users collection - users can only read/write their own profile using email doc IDs
+    match /users/{emailId} {
+      allow read: if isEmailOwner(emailId);
+      allow create: if isEmailOwner(emailId) &&
+                      request.resource.data.uid == request.auth.uid &&
+                      request.resource.data.email == emailId &&
                       request.resource.data.createdAt is timestamp;
-      allow update: if isOwner(userId);
-      allow delete: if isOwner(userId);
+      allow update: if isEmailOwner(emailId) &&
+                      request.resource.data.uid == resource.data.uid &&
+                      request.resource.data.email == emailId;
+      allow delete: if isEmailOwner(emailId);
     }
     
     // Chat sessions - users can only access their own sessions
@@ -40,8 +52,7 @@ service cloud.firestore {
       allow create: if isAuthenticated() && 
                        request.resource.data.userId == request.auth.uid &&
                        request.resource.data.title is string &&
-                       request.resource.data.model is string &&
-                       request.resource.data.createdAt is timestamp;
+                       request.resource.data.model is string;
       allow update: if isAuthenticated() && 
                        resource.data.userId == request.auth.uid;
       allow delete: if isAuthenticated() && 
@@ -56,8 +67,7 @@ service cloud.firestore {
                        request.resource.data.userId == request.auth.uid &&
                        request.resource.data.sessionId is string &&
                        request.resource.data.role in ['user', 'assistant'] &&
-                       request.resource.data.content is string &&
-                       request.resource.data.timestamp is timestamp;
+                       request.resource.data.content is string;
       allow update: if false; // Messages should not be updated
       allow delete: if isAuthenticated() && 
                        resource.data.userId == request.auth.uid;

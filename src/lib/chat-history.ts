@@ -9,6 +9,7 @@ import {
   where,
   limit,
   Timestamp,
+  serverTimestamp,
   increment,
   writeBatch
 } from 'firebase/firestore';
@@ -65,13 +66,12 @@ function toReadableFirestoreError(error: any, fallback: string): Error {
 // Create a new chat session
 export async function createChatSession(userId: string, title: string, model: string): Promise<string> {
   try {
-    const now = Timestamp.now();
     const sessionRef = await addDoc(collection(db, 'chatSessions'), {
       userId,
       title,
       model,
-      createdAt: now,
-      updatedAt: now,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
       messageCount: 0,
     });
     return sessionRef.id;
@@ -166,7 +166,7 @@ export async function saveMessage(
 
     // Update session's updatedAt and message count
     await updateDoc(doc(db, 'chatSessions', sessionId), {
-      updatedAt: Timestamp.now(),
+      updatedAt: serverTimestamp(),
       messageCount: increment(1),
     });
   } catch (error: any) {
@@ -205,7 +205,7 @@ export async function updateSessionTitle(sessionId: string, title: string): Prom
   try {
     await updateDoc(doc(db, 'chatSessions', sessionId), {
       title,
-      updatedAt: Timestamp.now(),
+      updatedAt: serverTimestamp(),
     });
   } catch (error: any) {
     console.error('Error updating session title:', error);

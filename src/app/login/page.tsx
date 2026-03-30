@@ -19,6 +19,17 @@ export default function LoginPage() {
   const router = useRouter();
 
   useEffect(() => {
+    if (typeof window === 'undefined' || email) {
+      return;
+    }
+
+    const prefilledEmail = new URLSearchParams(window.location.search).get('email');
+    if (prefilledEmail) {
+      setEmail(prefilledEmail);
+    }
+  }, [email]);
+
+  useEffect(() => {
     if (!authLoading && user) {
       router.replace('/analyze');
     }

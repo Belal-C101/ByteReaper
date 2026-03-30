@@ -93,26 +93,34 @@ function toReadableFirestoreError(error: any, fallback: string): Error {
 }
 
 async function getExistingChatNameSet(userId: string): Promise<Set<string>> {
-  const [activeSnapshot, archivedSnapshot] = await Promise.all([
-    getDocs(
-      query(
-        collection(db, CHAT_SESSIONS_COLLECTION),
-        where('userId', '==', userId),
-        limit(300)
-      )
-    ),
-    getDocs(
+  const activeSnapshot = await getDocs(
+    query(
+      collection(db, CHAT_SESSIONS_COLLECTION),
+      where('userId', '==', userId),
+      limit(300)
+    )
+  );
+
+  let archivedSnapshot = null as Awaited<ReturnType<typeof getDocs>> | null;
+
+  try {
+    archivedSnapshot = await getDocs(
       query(
         collection(db, ARCHIVED_CHATS_COLLECTION),
         where('userId', '==', userId),
         limit(300)
       )
-    ),
-  ]);
+    );
+  } catch (error: any) {
+    const errorCode = typeof error?.code === 'string' ? error.code : '';
+    if (errorCode !== 'permission-denied' && errorCode !== 'firestore/permission-denied') {
+      throw error;
+    }
+  }
 
   const names = new Set<string>();
   activeSnapshot.docs.forEach((sessionDoc) => names.add(sessionDoc.id));
-  archivedSnapshot.docs.forEach((sessionDoc) => names.add(sessionDoc.id));
+  archivedSnapshot?.docs.forEach((sessionDoc) => names.add(sessionDoc.id));
 
   return names;
 }
@@ -212,19 +220,6 @@ export async function createChatSession(userId: string, title: string, model: st
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
-
-    await setDoc(
-      doc(db, CHAT_MESSAGES_COLLECTION, uniqueTitle),
-      {
-        userId,
-        title: uniqueTitle,
-        messageCount: 0,
-        isArchived: false,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true }
-    );
 
     return uniqueTitle;
   } catch (error: any) {

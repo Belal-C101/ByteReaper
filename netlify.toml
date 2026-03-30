@@ -7,8 +7,7 @@
 
 # Next.js specific configuration
 [build.environment]
-  NODE_VERSION = "18"
-  NPM_VERSION = "9"
+  NODE_VERSION = "20"
 
 # Redirect all server requests to Next.js
 [[redirects]]

@@ -21,7 +21,6 @@ const nextConfig = {
   },
 
   // Production optimizations
-  swcMinify: true,
   reactStrictMode: true,
   
   // Reduce bundle size

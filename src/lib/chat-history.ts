@@ -109,6 +109,19 @@ function isPermissionDeniedError(error: any): boolean {
   return code === 'permission-denied' || code === 'firestore/permission-denied';
 }
 
+function isNotFoundError(error: any): boolean {
+  const code = getFirestoreErrorCode(error);
+  return code === 'not-found' || code === 'firestore/not-found';
+}
+
+function toObjectRecord(value: unknown): Record<string, any> {
+  if (value && typeof value === 'object') {
+    return value as Record<string, any>;
+  }
+
+  return {};
+}
+
 async function getExistingChatNameSet(userId: string): Promise<Set<string>> {
   const activeSnapshot = await getDocs(
     query(
@@ -176,13 +189,14 @@ function mapSessionDocToSession(sessionId: string, data: any, fallbackArchived =
   };
 }
 
-async function getLegacySessionMessages(sessionId: string): Promise<ChatMessage[]> {
+async function getLegacySessionMessages(sessionId: string, userId?: string): Promise<ChatMessage[]> {
+  const constraints = [where('sessionId', '==', sessionId)];
+  if (userId) {
+    constraints.push(where('userId', '==', userId));
+  }
+
   const legacySnapshot = await getDocs(
-    query(
-      collection(db, CHAT_MESSAGES_COLLECTION),
-      where('sessionId', '==', sessionId),
-      limit(500)
-    )
+    query(collection(db, CHAT_MESSAGES_COLLECTION), ...constraints, limit(500))
   );
 
   return legacySnapshot.docs
@@ -289,7 +303,7 @@ export async function getArchivedChatSessions(userId: string): Promise<ChatSessi
 // Get messages for a specific chat session.
 // New format: chatMessages/{chatName}/messages/{messageDoc}
 // Legacy fallback: top-level chatMessages documents with role/content.
-export async function getSessionMessages(sessionId: string): Promise<ChatMessage[]> {
+export async function getSessionMessages(sessionId: string, userId?: string): Promise<ChatMessage[]> {
   try {
     const modernSnapshot = await getDocs(
       query(collection(db, CHAT_MESSAGES_COLLECTION, sessionId, 'messages'), limit(600))
@@ -329,60 +343,11 @@ export async function getSessionMessages(sessionId: string): Promise<ChatMessage
       return messages.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
     }
 
-    return await getLegacySessionMessages(sessionId);
+    return await getLegacySessionMessages(sessionId, userId);
   } catch (error: any) {
     console.error('Error getting session messages:', error);
     return [];
   }
-}
-
-// Save a user+assistant exchange in a grouped message document and track the generating model.
-async function saveLegacyChatExchange(
-  sessionId: string,
-  userId: string,
-  userMessage: ChatMessage,
-  assistantMessage: ChatMessage,
-  model: string
-): Promise<void> {
-  const userTimestamp =
-    userMessage.timestamp instanceof Date
-      ? userMessage.timestamp
-      : new Date(userMessage.timestamp);
-
-  const assistantTimestamp =
-    assistantMessage.timestamp instanceof Date
-      ? assistantMessage.timestamp
-      : new Date(assistantMessage.timestamp);
-
-  await addDoc(collection(db, CHAT_MESSAGES_COLLECTION), {
-    sessionId,
-    userId,
-    id: userMessage.id,
-    role: 'user',
-    content: userMessage.content,
-    timestamp: Timestamp.fromDate(userTimestamp),
-    attachments: userMessage.attachments ?? null,
-    searchResults: null,
-  });
-
-  await addDoc(collection(db, CHAT_MESSAGES_COLLECTION), {
-    sessionId,
-    userId,
-    id: assistantMessage.id,
-    role: 'assistant',
-    content: assistantMessage.content,
-    timestamp: Timestamp.fromDate(assistantTimestamp),
-    attachments: null,
-    searchResults: assistantMessage.searchResults ?? null,
-    error: assistantMessage.error ?? null,
-  });
-
-  await updateDoc(doc(db, CHAT_SESSIONS_COLLECTION, sessionId), {
-    model,
-    isArchived: false,
-    updatedAt: serverTimestamp(),
-    messageCount: increment(2),
-  });
 }
 
 export async function saveChatExchange(
@@ -392,7 +357,7 @@ export async function saveChatExchange(
   assistantMessage: ChatMessage,
   model: string
 ): Promise<void> {
-  const modernExchangeWrite = async () => {
+  try {
     const sessionRef = doc(db, CHAT_SESSIONS_COLLECTION, sessionId);
     const existingSession = await getDoc(sessionRef);
 
@@ -441,6 +406,8 @@ export async function saveChatExchange(
     });
 
     await updateDoc(sessionRef, {
+      userId,
+      title: sessionId,
       model,
       isArchived: false,
       updatedAt: serverTimestamp(),
@@ -450,30 +417,17 @@ export async function saveChatExchange(
     await setDoc(
       threadRef,
       {
+        userId,
+        title: sessionId,
         updatedAt: serverTimestamp(),
         isArchived: false,
         messageCount: increment(2),
       },
       { merge: true }
     );
-  };
-
-  try {
-    await modernExchangeWrite();
   } catch (error: any) {
-    if (!isPermissionDeniedError(error)) {
-      console.error('Error saving chat exchange:', error);
-      throw toReadableFirestoreError(error, 'Failed to save chat exchange');
-    }
-
-    console.warn('Modern chat exchange write denied; attempting legacy fallback.', error);
-
-    try {
-      await saveLegacyChatExchange(sessionId, userId, userMessage, assistantMessage, model);
-    } catch (legacyError: any) {
-      console.error('Legacy fallback save failed:', legacyError);
-      throw toReadableFirestoreError(legacyError, 'Failed to save chat exchange');
-    }
+    console.error('Error saving chat exchange:', error);
+    throw toReadableFirestoreError(error, 'Failed to save chat exchange');
   }
 }
 
@@ -497,10 +451,26 @@ export async function renameChatSession(sessionId: string, nextTitle: string, us
     }
 
     const oldThreadRef = doc(db, CHAT_MESSAGES_COLLECTION, sessionId);
-    const oldThreadSnapshot = await getDoc(oldThreadRef);
+    let oldThreadSnapshot: Awaited<ReturnType<typeof getDoc>> | null = null;
+
+    try {
+      oldThreadSnapshot = await getDoc(oldThreadRef);
+    } catch (threadReadError: any) {
+      if (!isPermissionDeniedError(threadReadError)) {
+        throw threadReadError;
+      }
+    }
 
     const oldArchiveRef = doc(db, ARCHIVED_CHATS_COLLECTION, sessionId);
-    const oldArchiveSnapshot = await getDoc(oldArchiveRef);
+    let oldArchiveSnapshot: Awaited<ReturnType<typeof getDoc>> | null = null;
+
+    try {
+      oldArchiveSnapshot = await getDoc(oldArchiveRef);
+    } catch (archiveReadError: any) {
+      if (!isPermissionDeniedError(archiveReadError)) {
+        throw archiveReadError;
+      }
+    }
 
     const renameBatch = writeBatch(db);
 
@@ -511,9 +481,10 @@ export async function renameChatSession(sessionId: string, nextTitle: string, us
     });
     renameBatch.delete(oldSessionRef);
 
-    if (oldThreadSnapshot.exists()) {
+    const oldThreadData = oldThreadSnapshot?.exists() ? toObjectRecord(oldThreadSnapshot.data()) : null;
+    if (oldThreadData) {
       renameBatch.set(doc(db, CHAT_MESSAGES_COLLECTION, uniqueNextTitle), {
-        ...oldThreadSnapshot.data(),
+        ...oldThreadData,
         title: uniqueNextTitle,
         updatedAt: serverTimestamp(),
       });
@@ -533,9 +504,10 @@ export async function renameChatSession(sessionId: string, nextTitle: string, us
       );
     }
 
-    if (oldArchiveSnapshot.exists()) {
+    const oldArchiveData = oldArchiveSnapshot?.exists() ? toObjectRecord(oldArchiveSnapshot.data()) : null;
+    if (oldArchiveData) {
       renameBatch.set(doc(db, ARCHIVED_CHATS_COLLECTION, uniqueNextTitle), {
-        ...oldArchiveSnapshot.data(),
+        ...oldArchiveData,
         title: uniqueNextTitle,
         updatedAt: serverTimestamp(),
       });
@@ -601,10 +573,16 @@ export async function archiveChatSession(sessionId: string, userId: string): Pro
       updatedAt: serverTimestamp(),
     });
 
-    archiveBatch.update(sessionRef, {
-      isArchived: true,
-      updatedAt: serverTimestamp(),
-    });
+    archiveBatch.set(
+      sessionRef,
+      {
+        userId,
+        title: sessionId,
+        isArchived: true,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
 
     archiveBatch.set(
       doc(db, CHAT_MESSAGES_COLLECTION, sessionId),
@@ -617,7 +595,24 @@ export async function archiveChatSession(sessionId: string, userId: string): Pro
       { merge: true }
     );
 
-    await archiveBatch.commit();
+    try {
+      await archiveBatch.commit();
+    } catch (archiveCommitError: any) {
+      if (!isPermissionDeniedError(archiveCommitError)) {
+        throw archiveCommitError;
+      }
+
+      await setDoc(
+        sessionRef,
+        {
+          userId,
+          title: sessionId,
+          isArchived: true,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
   } catch (error: any) {
     console.error('Error archiving chat session:', error);
     throw toReadableFirestoreError(error, 'Failed to archive chat session');
@@ -628,13 +623,19 @@ export async function archiveChatSession(sessionId: string, userId: string): Pro
 export async function restoreArchivedChatSession(sessionId: string, userId: string): Promise<void> {
   try {
     const archiveRef = doc(db, ARCHIVED_CHATS_COLLECTION, sessionId);
-    const archiveSnapshot = await getDoc(archiveRef);
+    let archiveSnapshot: Awaited<ReturnType<typeof getDoc>> | null = null;
 
-    if (!archiveSnapshot.exists()) {
-      throw new Error('Archived chat not found');
+    try {
+      archiveSnapshot = await getDoc(archiveRef);
+    } catch (archiveReadError: any) {
+      if (!isPermissionDeniedError(archiveReadError)) {
+        throw archiveReadError;
+      }
     }
 
-    if (archiveSnapshot.data().userId !== userId) {
+    const archivedRecord = archiveSnapshot?.exists() ? toObjectRecord(archiveSnapshot.data()) : null;
+
+    if (archivedRecord && archivedRecord.userId !== userId) {
       throw new Error('You do not have permission to restore this chat');
     }
 
@@ -644,21 +645,30 @@ export async function restoreArchivedChatSession(sessionId: string, userId: stri
     const restoreBatch = writeBatch(db);
 
     if (sessionSnapshot.exists()) {
-      restoreBatch.update(sessionRef, {
-        isArchived: false,
-        updatedAt: serverTimestamp(),
-      });
-    } else {
-      const archivedData = archiveSnapshot.data();
+      restoreBatch.set(
+        sessionRef,
+        {
+          userId,
+          title: sessionId,
+          isArchived: false,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } else if (archivedRecord) {
       restoreBatch.set(sessionRef, {
-        ...archivedData,
+        ...archivedRecord,
         title: sessionId,
         isArchived: false,
         updatedAt: serverTimestamp(),
       });
+    } else {
+      throw new Error('Archived chat not found');
     }
 
-    restoreBatch.delete(archiveRef);
+    if (archiveSnapshot?.exists()) {
+      restoreBatch.delete(archiveRef);
+    }
 
     restoreBatch.set(
       doc(db, CHAT_MESSAGES_COLLECTION, sessionId),
@@ -671,7 +681,24 @@ export async function restoreArchivedChatSession(sessionId: string, userId: stri
       { merge: true }
     );
 
-    await restoreBatch.commit();
+    try {
+      await restoreBatch.commit();
+    } catch (restoreCommitError: any) {
+      if (!isPermissionDeniedError(restoreCommitError)) {
+        throw restoreCommitError;
+      }
+
+      await setDoc(
+        sessionRef,
+        {
+          userId,
+          title: sessionId,
+          isArchived: false,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
   } catch (error: any) {
     console.error('Error restoring archived chat session:', error);
     throw toReadableFirestoreError(error, 'Failed to restore archived chat');
@@ -679,16 +706,17 @@ export async function restoreArchivedChatSession(sessionId: string, userId: stri
 }
 
 // Delete session metadata and both modern + legacy message structures.
-export async function deleteChatSession(sessionId: string): Promise<void> {
+export async function deleteChatSession(sessionId: string, userId?: string): Promise<void> {
   try {
     await deleteCollectionInChunks([CHAT_MESSAGES_COLLECTION, sessionId, 'messages']);
 
+    const legacyConstraints = [where('sessionId', '==', sessionId)];
+    if (userId) {
+      legacyConstraints.push(where('userId', '==', userId));
+    }
+
     const legacySnapshot = await getDocs(
-      query(
-        collection(db, CHAT_MESSAGES_COLLECTION),
-        where('sessionId', '==', sessionId),
-        limit(600)
-      )
+      query(collection(db, CHAT_MESSAGES_COLLECTION), ...legacyConstraints, limit(600))
     );
 
     if (!legacySnapshot.empty) {
@@ -699,8 +727,16 @@ export async function deleteChatSession(sessionId: string): Promise<void> {
 
     await Promise.all([
       deleteDoc(doc(db, CHAT_SESSIONS_COLLECTION, sessionId)),
-      deleteDoc(doc(db, CHAT_MESSAGES_COLLECTION, sessionId)),
-      deleteDoc(doc(db, ARCHIVED_CHATS_COLLECTION, sessionId)),
+      deleteDoc(doc(db, CHAT_MESSAGES_COLLECTION, sessionId)).catch((error: any) => {
+        if (!isNotFoundError(error)) {
+          throw error;
+        }
+      }),
+      deleteDoc(doc(db, ARCHIVED_CHATS_COLLECTION, sessionId)).catch((error: any) => {
+        if (!isNotFoundError(error) && !isPermissionDeniedError(error)) {
+          throw error;
+        }
+      }),
     ]);
   } catch (error: any) {
     console.error('Error deleting chat session:', error);

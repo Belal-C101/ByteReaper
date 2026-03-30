@@ -37,6 +37,8 @@ export interface AgentResponse {
   toolUsed?: string;
 }
 
+export const STREAM_MODEL_META_PREFIX = '__BYTEREAPER_MODEL__:';
+
 async function callOpenRouter(
   messages: { role: string; content: string }[], 
   modelKey: ModelKey = DEFAULT_MODEL,
@@ -226,6 +228,13 @@ export async function* streamAgentMessage(
       return;
     }
 
+    let resolvedModelId =
+      response.headers.get('x-openrouter-model') ||
+      response.headers.get('x-model') ||
+      model.id;
+
+    yield `${STREAM_MODEL_META_PREFIX}${resolvedModelId}`;
+
     const reader = response.body?.getReader();
     const decoder = new TextDecoder();
 
@@ -250,6 +259,11 @@ export async function* streamAgentMessage(
 
           try {
             const parsed = JSON.parse(data);
+            if (typeof parsed.model === 'string' && parsed.model.trim() && parsed.model !== resolvedModelId) {
+              resolvedModelId = parsed.model;
+              yield `${STREAM_MODEL_META_PREFIX}${resolvedModelId}`;
+            }
+
             const content = parsed.choices?.[0]?.delta?.content;
             if (content) {
               hasContent = true;

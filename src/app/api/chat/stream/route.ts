@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { streamAgentMessage } from '@/lib/ai/agent';
+import { streamAgentMessage, STREAM_MODEL_META_PREFIX } from '@/lib/ai/agent';
 import { ChatMessage, FileAttachment } from '@/types/chat';
 import { ModelKey, DEFAULT_MODEL } from '@/lib/ai/gemini';
 
@@ -29,6 +29,12 @@ export async function POST(request: NextRequest) {
           const generator = streamAgentMessage(message, attachments, history, model);
           
           for await (const chunk of generator) {
+            if (chunk.startsWith(STREAM_MODEL_META_PREFIX)) {
+              const resolvedModel = chunk.slice(STREAM_MODEL_META_PREFIX.length);
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ model: resolvedModel })}\n\n`));
+              continue;
+            }
+
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`));
           }
           

@@ -376,7 +376,7 @@ export function ChatInterface() {
     let isMounted = true;
     setIsMessagesLoading(true);
 
-    getSessionMessages(sessionId)
+    getSessionMessages(sessionId, user?.uid)
       .then((storedMessages) => {
         if (!isMounted) return;
         setMessages(storedMessages);
@@ -397,7 +397,7 @@ export function ChatInterface() {
     return () => {
       isMounted = false;
     };
-  }, [sessionId, isDraftSessionId]);
+  }, [sessionId, user?.uid, isDraftSessionId]);
 
   // Prefill prompt from landing page if available
   useEffect(() => {
@@ -520,13 +520,15 @@ export function ChatInterface() {
 
   const handleDeleteSession = useCallback(
     async (session: ChatSession) => {
+      if (!user) return;
+
       const shouldDelete = window.confirm(`Delete "${session.title}"? This cannot be undone.`);
       if (!shouldDelete) return;
 
       setChatError(null);
 
       try {
-        await deleteChatSession(session.id);
+        await deleteChatSession(session.id, user.uid);
 
         if (sessionId === session.id) {
           setSessionId(null);
@@ -543,7 +545,7 @@ export function ChatInterface() {
         setChatError(getErrorMessage(error, "Could not delete this chat right now."));
       }
     },
-    [sessionId, draftSession, loadSessions]
+    [user, sessionId, draftSession, loadSessions]
   );
 
   // Handle file upload
@@ -658,6 +660,7 @@ export function ChatInterface() {
     }
 
     const historyForModel = messages.slice(-10);
+    let modelUsedForExchange = selectedModel;
 
     const userMessage: ChatMessage = {
       id: generateId(),
@@ -721,7 +724,9 @@ export function ChatInterface() {
 
             try {
               const parsed = JSON.parse(data);
-              if (parsed.text) {
+              if (typeof parsed.model === "string" && parsed.model.trim()) {
+                modelUsedForExchange = parsed.model;
+              } else if (parsed.text) {
                 fullContent += parsed.text;
                 setMessages((prev) =>
                   prev.map((message) =>
@@ -761,7 +766,7 @@ export function ChatInterface() {
 
       if (canPersistToFirestore && activeSessionId) {
         try {
-          await saveChatExchange(activeSessionId, user.uid, userMessage, assistantMessage, selectedModel);
+          await saveChatExchange(activeSessionId, user.uid, userMessage, assistantMessage, modelUsedForExchange);
 
           await loadSessions(activeSessionId);
         } catch (persistError) {
@@ -800,7 +805,7 @@ export function ChatInterface() {
             timestamp: new Date(),
             error: error instanceof Error ? error.message : "Unknown error",
             isStreaming: false,
-          }, selectedModel);
+          }, modelUsedForExchange);
 
           await loadSessions(activeSessionId);
         } catch (persistError) {

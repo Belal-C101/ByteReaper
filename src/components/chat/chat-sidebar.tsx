@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { MessageSquare, Plus, Trash2, Loader2, PanelLeftClose, PanelLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -20,13 +20,7 @@ export function ChatSidebar({ currentSessionId, onSessionSelect, onNewChat }: Ch
   const [isOpen, setIsOpen] = useState(true);
 
   // Load sessions
-  useEffect(() => {
-    if (user) {
-      loadSessions();
-    }
-  }, [user]);
-
-  const loadSessions = async () => {
+  const loadSessions = useCallback(async () => {
     if (!user) return;
 
     setLoading(true);
@@ -38,7 +32,13 @@ export function ChatSidebar({ currentSessionId, onSessionSelect, onNewChat }: Ch
     } finally {
       setLoading(false);
     }
-  };
+  }, [user]);
+
+  useEffect(() => {
+    if (user) {
+      loadSessions();
+    }
+  }, [user, loadSessions]);
 
   const handleDeleteSession = async (sessionId: string, e: React.MouseEvent) => {
     e.stopPropagation();

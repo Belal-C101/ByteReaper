@@ -472,25 +472,23 @@ export async function renameChatSession(sessionId: string, nextTitle: string, us
       }
     }
 
-    const renameBatch = writeBatch(db);
+    const createTargetsBatch = writeBatch(db);
 
-    renameBatch.set(doc(db, CHAT_SESSIONS_COLLECTION, uniqueNextTitle), {
+    createTargetsBatch.set(doc(db, CHAT_SESSIONS_COLLECTION, uniqueNextTitle), {
       ...oldSessionSnapshot.data(),
       title: uniqueNextTitle,
       updatedAt: serverTimestamp(),
     });
-    renameBatch.delete(oldSessionRef);
 
     const oldThreadData = oldThreadSnapshot?.exists() ? toObjectRecord(oldThreadSnapshot.data()) : null;
     if (oldThreadData) {
-      renameBatch.set(doc(db, CHAT_MESSAGES_COLLECTION, uniqueNextTitle), {
+      createTargetsBatch.set(doc(db, CHAT_MESSAGES_COLLECTION, uniqueNextTitle), {
         ...oldThreadData,
         title: uniqueNextTitle,
         updatedAt: serverTimestamp(),
       });
-      renameBatch.delete(oldThreadRef);
     } else {
-      renameBatch.set(
+      createTargetsBatch.set(
         doc(db, CHAT_MESSAGES_COLLECTION, uniqueNextTitle),
         {
           userId,
@@ -506,15 +504,14 @@ export async function renameChatSession(sessionId: string, nextTitle: string, us
 
     const oldArchiveData = oldArchiveSnapshot?.exists() ? toObjectRecord(oldArchiveSnapshot.data()) : null;
     if (oldArchiveData) {
-      renameBatch.set(doc(db, ARCHIVED_CHATS_COLLECTION, uniqueNextTitle), {
+      createTargetsBatch.set(doc(db, ARCHIVED_CHATS_COLLECTION, uniqueNextTitle), {
         ...oldArchiveData,
         title: uniqueNextTitle,
         updatedAt: serverTimestamp(),
       });
-      renameBatch.delete(oldArchiveRef);
     }
 
-    await renameBatch.commit();
+    await createTargetsBatch.commit();
 
     // Move grouped message documents to the new session ID.
     const oldMessagesSnapshot = await getDocs(collection(db, CHAT_MESSAGES_COLLECTION, sessionId, 'messages'));
@@ -541,6 +538,19 @@ export async function renameChatSession(sessionId: string, nextTitle: string, us
         await moveBatch.commit();
       }
     }
+
+    const cleanupBatch = writeBatch(db);
+    cleanupBatch.delete(oldSessionRef);
+
+    if (oldThreadData) {
+      cleanupBatch.delete(oldThreadRef);
+    }
+
+    if (oldArchiveData) {
+      cleanupBatch.delete(oldArchiveRef);
+    }
+
+    await cleanupBatch.commit();
 
     return uniqueNextTitle;
   } catch (error: any) {
@@ -725,19 +735,19 @@ export async function deleteChatSession(sessionId: string, userId?: string): Pro
       await legacyBatch.commit();
     }
 
-    await Promise.all([
-      deleteDoc(doc(db, CHAT_SESSIONS_COLLECTION, sessionId)),
-      deleteDoc(doc(db, CHAT_MESSAGES_COLLECTION, sessionId)).catch((error: any) => {
-        if (!isNotFoundError(error)) {
-          throw error;
-        }
-      }),
-      deleteDoc(doc(db, ARCHIVED_CHATS_COLLECTION, sessionId)).catch((error: any) => {
-        if (!isNotFoundError(error) && !isPermissionDeniedError(error)) {
-          throw error;
-        }
-      }),
-    ]);
+    await deleteDoc(doc(db, CHAT_MESSAGES_COLLECTION, sessionId)).catch((error: any) => {
+      if (!isNotFoundError(error) && !isPermissionDeniedError(error)) {
+        throw error;
+      }
+    });
+
+    await deleteDoc(doc(db, ARCHIVED_CHATS_COLLECTION, sessionId)).catch((error: any) => {
+      if (!isNotFoundError(error) && !isPermissionDeniedError(error)) {
+        throw error;
+      }
+    });
+
+    await deleteDoc(doc(db, CHAT_SESSIONS_COLLECTION, sessionId));
   } catch (error: any) {
     console.error('Error deleting chat session:', error);
     throw toReadableFirestoreError(error, 'Failed to delete chat session');

@@ -1,3 +1,5 @@
+import 'server-only';
+
 import { searchWeb } from '@/lib/search/duckduckgo';
 import { ChatMessage, FileAttachment, SearchResult } from '@/types/chat';
 import { AI_MODELS, ModelKey, DEFAULT_MODEL } from './gemini';

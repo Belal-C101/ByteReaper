@@ -1,6 +1,9 @@
 // OpenRouter AI Client - Access to many free models
 // https://openrouter.ai/docs
 
+import 'server-only';
+
+// OpenRouter AI Client - Access to many free models
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
 // Available FREE models on OpenRouter - Verified March 2026

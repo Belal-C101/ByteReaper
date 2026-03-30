@@ -3,10 +3,11 @@ import { getReport } from "@/lib/db/client";
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const report = getReport(params.id);
+    const { id } = await params;
+    const report = getReport(id);
 
     if (!report) {
       return NextResponse.json(

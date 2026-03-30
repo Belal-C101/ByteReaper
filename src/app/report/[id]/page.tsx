@@ -7,11 +7,12 @@ import { TechStackCard } from "@/components/report/tech-stack-card";
 import { FindingsList } from "@/components/report/findings-list";
 
 interface ReportPageProps {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
-export default function ReportPage({ params }: ReportPageProps) {
-  const report = getReport(params.id);
+export default async function ReportPage({ params }: ReportPageProps) {
+  const { id } = await params;
+  const report = getReport(id);
 
   if (!report) {
     notFound();

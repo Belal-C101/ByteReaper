@@ -7,7 +7,6 @@ import {
   getDocs,
   query,
   where,
-  orderBy,
   limit,
   Timestamp,
   increment,
@@ -48,6 +47,21 @@ function parseFirestoreDate(value: unknown): Date {
   return new Date();
 }
 
+function toReadableFirestoreError(error: any, fallback: string): Error {
+  const code = typeof error?.code === 'string' ? error.code.replace('firestore/', '') : null;
+  const message = typeof error?.message === 'string' ? error.message : null;
+
+  if (code && message) {
+    return new Error(`${fallback} (${code}): ${message}`);
+  }
+
+  if (code) {
+    return new Error(`${fallback} (${code})`);
+  }
+
+  return new Error(fallback);
+}
+
 // Create a new chat session
 export async function createChatSession(userId: string, title: string, model: string): Promise<string> {
   try {
@@ -63,7 +77,7 @@ export async function createChatSession(userId: string, title: string, model: st
     return sessionRef.id;
   } catch (error: any) {
     console.error('Error creating chat session:', error);
-    throw new Error('Failed to create chat session');
+    throw toReadableFirestoreError(error, 'Failed to create chat session');
   }
 }
 
@@ -73,12 +87,11 @@ export async function getChatSessions(userId: string): Promise<ChatSession[]> {
     const q = query(
       collection(db, 'chatSessions'),
       where('userId', '==', userId),
-      orderBy('updatedAt', 'desc'),
       limit(50)
     );
     
     const querySnapshot = await getDocs(q);
-    return querySnapshot.docs.map((sessionDoc) => {
+    const sessions = querySnapshot.docs.map((sessionDoc) => {
       const data = sessionDoc.data();
 
       return {
@@ -91,6 +104,8 @@ export async function getChatSessions(userId: string): Promise<ChatSession[]> {
         messageCount: typeof data.messageCount === 'number' ? data.messageCount : 0,
       } as ChatSession;
     });
+
+    return sessions.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
   } catch (error: any) {
     console.error('Error getting chat sessions:', error);
     return [];
@@ -102,12 +117,11 @@ export async function getSessionMessages(sessionId: string): Promise<ChatMessage
   try {
     const q = query(
       collection(db, 'chatMessages'),
-      where('sessionId', '==', sessionId),
-      orderBy('timestamp', 'asc')
+      where('sessionId', '==', sessionId)
     );
     
     const querySnapshot = await getDocs(q);
-    return querySnapshot.docs.map(doc => {
+    const messages = querySnapshot.docs.map(doc => {
       const data = doc.data();
       return {
         id: data.id,
@@ -119,6 +133,8 @@ export async function getSessionMessages(sessionId: string): Promise<ChatMessage
         isStreaming: false,
       } as ChatMessage;
     });
+
+    return messages.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
   } catch (error: any) {
     console.error('Error getting session messages:', error);
     return [];
@@ -155,7 +171,7 @@ export async function saveMessage(
     });
   } catch (error: any) {
     console.error('Error saving message:', error);
-    throw new Error('Failed to save message');
+    throw toReadableFirestoreError(error, 'Failed to save message');
   }
 }
 
@@ -193,6 +209,6 @@ export async function updateSessionTitle(sessionId: string, title: string): Prom
     });
   } catch (error: any) {
     console.error('Error updating session title:', error);
-    throw new Error('Failed to update session title');
+    throw toReadableFirestoreError(error, 'Failed to update session title');
   }
 }

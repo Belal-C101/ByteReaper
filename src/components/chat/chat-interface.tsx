@@ -37,38 +37,42 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 const MAX_ATTACHMENT_SIZE_BYTES = 900 * 1024;
+const EMPTY_STATE_PROMPTS = [
+  "Review this React component for performance",
+  "Find security issues in my Node API",
+  "Explain this TypeScript error",
+  "Compare Prisma vs Drizzle for Next.js",
+];
 
 // Helper to generate unique IDs
 const generateId = () => Math.random().toString(36).substring(2, 15);
 
-const WELCOME_MESSAGE = `# 👋 Welcome to ByteReaper!
+function getFriendlyName(displayName?: string | null, email?: string | null): string {
+  if (displayName?.trim()) {
+    return displayName.trim().split(" ")[0];
+  }
 
-I'm your AI developer assistant. I can help you with:
+  if (email?.trim()) {
+    return email.split("@")[0];
+  }
 
-- 🔍 **Code Analysis** - Review your code for bugs, security issues, and improvements
-- 📁 **File Analysis** - Upload code files and I'll analyze them
-- 🌐 **Web Search** - Search for documentation, tutorials, or solutions
-- 📊 **GitHub Analysis** - Analyze public repositories
-- 💡 **Code Explanation** - Understand how code works
-- 🐛 **Debugging** - Help identify and fix bugs
+  return "there";
+}
 
-**Try these commands:**
-- "Analyze this code: [paste code]"
-- "Search for React hooks tutorial"
-- "Analyze github.com/facebook/react"
-- Or just upload a file and ask me to review it!
+function getDayGreeting(): string {
+  const hour = new Date().getHours();
 
-What would you like help with today?`;
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+}
 
-function getWelcomeMessages(): ChatMessage[] {
-  return [
-    {
-      id: "welcome",
-      role: "assistant",
-      content: WELCOME_MESSAGE,
-      timestamp: new Date(),
-    },
-  ];
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+
+  return fallback;
 }
 
 function formatSessionDate(date: Date): string {
@@ -221,7 +225,7 @@ export function ChatInterface() {
   const { user } = useAuth();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [messages, setMessages] = useState<ChatMessage[]>(getWelcomeMessages());
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
@@ -244,6 +248,11 @@ export function ChatInterface() {
         let fetchedSessions = await getChatSessions(user.uid);
 
         if (fetchedSessions.length === 0) {
+          if (preferredSessionId || sessionId) {
+            setSessions([]);
+            return;
+          }
+
           const createdSessionId = await createChatSession(user.uid, "New Chat", selectedModel);
           fetchedSessions = await getChatSessions(user.uid);
           setSessions(fetchedSessions);
@@ -265,7 +274,7 @@ export function ChatInterface() {
         }
       } catch (error) {
         console.error("Failed to load chat sessions:", error);
-        setChatError("Could not load chat history right now.");
+        setChatError(getErrorMessage(error, "Could not load chat history right now."));
       } finally {
         setIsHistoryLoading(false);
       }
@@ -277,7 +286,7 @@ export function ChatInterface() {
     if (!user) {
       setSessionId(null);
       setSessions([]);
-      setMessages(getWelcomeMessages());
+      setMessages([]);
       return;
     }
 
@@ -287,7 +296,7 @@ export function ChatInterface() {
   // Load selected chat messages
   useEffect(() => {
     if (!sessionId) {
-      setMessages(getWelcomeMessages());
+      setMessages([]);
       return;
     }
 
@@ -297,13 +306,13 @@ export function ChatInterface() {
     getSessionMessages(sessionId)
       .then((storedMessages) => {
         if (!isMounted) return;
-        setMessages(storedMessages.length > 0 ? storedMessages : getWelcomeMessages());
+        setMessages(storedMessages);
       })
       .catch((error) => {
         console.error("Failed to load chat messages:", error);
         if (isMounted) {
-          setMessages(getWelcomeMessages());
-          setChatError("Could not load messages for this chat.");
+          setMessages([]);
+          setChatError(getErrorMessage(error, "Could not load messages for this chat."));
         }
       })
       .finally(() => {
@@ -349,11 +358,11 @@ export function ChatInterface() {
     try {
       const createdSessionId = await createChatSession(user.uid, "New Chat", selectedModel);
       setSessionId(createdSessionId);
-      setMessages(getWelcomeMessages());
+      setMessages([]);
       await loadSessions(createdSessionId);
     } catch (error) {
       console.error("Failed to create new chat:", error);
-      setChatError("Failed to create a new chat. Please try again.");
+      setChatError(getErrorMessage(error, "Failed to create a new chat. Please try again."));
     }
   }, [user, isLoading, selectedModel, loadSessions]);
 
@@ -424,6 +433,7 @@ export function ChatInterface() {
     setChatError(null);
 
     let activeSessionId = sessionId;
+    let canPersistToFirestore = true;
     if (!activeSessionId) {
       try {
         activeSessionId = await createChatSession(user.uid, "New Chat", selectedModel);
@@ -431,17 +441,14 @@ export function ChatInterface() {
         await loadSessions(activeSessionId);
       } catch (error) {
         console.error("Failed to initialize chat session:", error);
-        setChatError("Could not create a chat session. Please try again.");
-        return;
+        canPersistToFirestore = false;
+        setChatError(
+          "Chat history is unavailable right now. You can still send messages, but they may not be saved."
+        );
       }
     }
 
-    if (!activeSessionId) {
-      setChatError("Chat session is not ready yet.");
-      return;
-    }
-
-    const historyForModel = messages.filter((message) => message.id !== "welcome").slice(-10);
+    const historyForModel = messages.slice(-10);
     const isFirstRealMessage = historyForModel.length === 0;
 
     const userMessage: ChatMessage = {
@@ -546,15 +553,22 @@ export function ChatInterface() {
         )
       );
 
-      await saveMessage(activeSessionId, user.uid, userMessage);
-      userMessagePersisted = true;
-      await saveMessage(activeSessionId, user.uid, assistantMessage);
+      if (canPersistToFirestore && activeSessionId) {
+        try {
+          await saveMessage(activeSessionId, user.uid, userMessage);
+          userMessagePersisted = true;
+          await saveMessage(activeSessionId, user.uid, assistantMessage);
 
-      if (isFirstRealMessage && userMessage.content.trim()) {
-        await updateSessionTitle(activeSessionId, userMessage.content.trim().slice(0, 60));
+          if (isFirstRealMessage && userMessage.content.trim()) {
+            await updateSessionTitle(activeSessionId, userMessage.content.trim().slice(0, 60));
+          }
+
+          await loadSessions(activeSessionId);
+        } catch (persistError) {
+          console.error("Failed to save successful chat exchange:", persistError);
+          setChatError(getErrorMessage(persistError, "Message sent, but chat history could not be saved."));
+        }
       }
-
-      await loadSessions(activeSessionId);
     } catch (error) {
       console.error("Chat error:", error);
       const fallbackText =
@@ -577,27 +591,29 @@ export function ChatInterface() {
       );
 
       // Persist user + error response to keep chat history complete
-      try {
-        if (!userMessagePersisted) {
-          await saveMessage(activeSessionId, user.uid, userMessage);
+      if (canPersistToFirestore && activeSessionId) {
+        try {
+          if (!userMessagePersisted) {
+            await saveMessage(activeSessionId, user.uid, userMessage);
+          }
+
+          await saveMessage(activeSessionId, user.uid, {
+            id: assistantId,
+            role: "assistant",
+            content: fallbackText,
+            timestamp: new Date(),
+            error: error instanceof Error ? error.message : "Unknown error",
+            isStreaming: false,
+          });
+
+          if (isFirstRealMessage && userMessage.content.trim()) {
+            await updateSessionTitle(activeSessionId, userMessage.content.trim().slice(0, 60));
+          }
+
+          await loadSessions(activeSessionId);
+        } catch (persistError) {
+          console.error("Failed to persist failed chat exchange:", persistError);
         }
-
-        await saveMessage(activeSessionId, user.uid, {
-          id: assistantId,
-          role: "assistant",
-          content: fallbackText,
-          timestamp: new Date(),
-          error: error instanceof Error ? error.message : "Unknown error",
-          isStreaming: false,
-        });
-
-        if (isFirstRealMessage && userMessage.content.trim()) {
-          await updateSessionTitle(activeSessionId, userMessage.content.trim().slice(0, 60));
-        }
-
-        await loadSessions(activeSessionId);
-      } catch (persistError) {
-        console.error("Failed to persist failed chat exchange:", persistError);
       }
     } finally {
       setIsLoading(false);
@@ -612,7 +628,13 @@ export function ChatInterface() {
     }
   };
 
+  const handleQuickPromptSelect = (prompt: string) => {
+    setInput(prompt);
+    textareaRef.current?.focus();
+  };
+
   const activeSession = sessions.find((session) => session.id === sessionId);
+  const friendlyName = getFriendlyName(user?.displayName, user?.email);
 
   return (
     <div className="flex h-[calc(100vh-8rem)] max-w-7xl mx-auto border rounded-2xl overflow-hidden bg-background/40">
@@ -704,6 +726,8 @@ export function ChatInterface() {
             <div className="h-full flex items-center justify-center text-muted-foreground">
               <Loader2 className="h-6 w-6 animate-spin" />
             </div>
+          ) : messages.length === 0 ? (
+            <EmptyChatState friendlyName={friendlyName} onSelectPrompt={handleQuickPromptSelect} />
           ) : (
             messages.map((message) => <MessageBubble key={message.id} message={message} />)
           )}
@@ -773,6 +797,42 @@ export function ChatInterface() {
             <ModelSelector selectedModel={selectedModel} onSelect={setSelectedModel} disabled={isLoading} />
             <p className="text-xs text-muted-foreground">Drag & drop files • Stored in Firestore</p>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EmptyChatState({
+  friendlyName,
+  onSelectPrompt,
+}: {
+  friendlyName: string;
+  onSelectPrompt: (prompt: string) => void;
+}) {
+  return (
+    <div className="h-full flex items-center justify-center px-4">
+      <div className="w-full max-w-3xl text-center space-y-6">
+        <h2 className="text-3xl md:text-5xl font-semibold tracking-tight text-foreground/90">
+          <span className="text-primary mr-2">✶</span>
+          {getDayGreeting()}, {friendlyName}
+        </h2>
+
+        <p className="text-sm md:text-base text-muted-foreground">
+          Ask anything about code, architecture, debugging, or docs. I’ll keep ByteReaper’s vibe while thinking like a senior teammate.
+        </p>
+
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {EMPTY_STATE_PROMPTS.map((prompt) => (
+            <button
+              key={prompt}
+              type="button"
+              onClick={() => onSelectPrompt(prompt)}
+              className="px-3 py-1.5 text-xs md:text-sm rounded-full border bg-card/70 hover:bg-accent transition-colors"
+            >
+              {prompt}
+            </button>
+          ))}
         </div>
       </div>
     </div>

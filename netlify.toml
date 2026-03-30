@@ -3,18 +3,10 @@
 
 [build]
   command = "npm run build"
-  publish = ".next"
 
 # Next.js specific configuration
 [build.environment]
   NODE_VERSION = "20"
-
-# Redirect all server requests to Next.js
-[[redirects]]
-  from = "/*"
-  to = "/.netlify/functions/___netlify-handler"
-  status = 200
-  force = false
 
 # Headers for security and performance
 [[headers]]
@@ -40,8 +32,3 @@
 # Enable Next.js Image Optimization
 [[plugins]]
   package = "@netlify/plugin-nextjs"
-
-# Function settings for API routes
-[functions]
-  node_bundler = "esbuild"
-  external_node_modules = ["firebase", "firebase-admin"]

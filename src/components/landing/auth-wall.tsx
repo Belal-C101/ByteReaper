@@ -2,6 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
@@ -12,7 +13,6 @@ import {
   CheckCircle2,
   Circle,
   FileText,
-  Skull,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -84,7 +84,13 @@ export function AuthWall() {
             className="max-w-xl mx-auto lg:mx-0"
           >
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border bg-card/60 text-sm mb-5">
-              <Skull className="h-4 w-4 text-primary" />
+              <Image
+                src="/brand/bytereaper-mark.svg"
+                alt="ByteReaper logo"
+                width={16}
+                height={16}
+                className="h-4 w-4"
+              />
               <span className="font-medium">ByteReaper</span>
             </div>
 

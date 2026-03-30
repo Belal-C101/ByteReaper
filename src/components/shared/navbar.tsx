@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
-import { Skull, Moon, Sun, Github, MessageSquare, LogOut, User as UserIcon } from "lucide-react";
+import { Moon, Sun, Github, MessageSquare, LogOut, User as UserIcon } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { signOut } from "@/lib/auth";
 import { useRouter } from "next/navigation";
@@ -24,17 +25,22 @@ export function Navbar() {
 
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="container flex h-16 items-center justify-between">
+      <div className="w-full px-4 sm:px-6 lg:px-10 flex h-16 items-center justify-between">
         {/* Logo */}
-        <Link href="/" className="flex items-center gap-2">
-          <div className="relative">
-            <Skull className="h-8 w-8 text-primary" />
-          </div>
-          <span className="font-bold text-xl hidden sm:inline">ByteReaper</span>
+        <Link href="/" className="flex items-center gap-2.5">
+          <Image
+            src="/brand/bytereaper-mark.svg"
+            alt="ByteReaper logo"
+            width={34}
+            height={34}
+            className="h-[34px] w-[34px]"
+            priority
+          />
+          <span className="font-bold text-2xl hidden sm:inline tracking-tight">ByteReaper</span>
         </Link>
 
         {/* Navigation */}
-        <nav className="flex items-center gap-2">
+        <nav className="flex items-center gap-1 sm:gap-2">
           {user ? (
             <>
               <Link href="/analyze">
@@ -85,7 +91,7 @@ export function Navbar() {
           </Button>
 
           <a
-            href="https://github.com"
+            href="https://github.com/Belal-C101/ByteReaper"
             target="_blank"
             rel="noopener noreferrer"
           >

@@ -1,9 +1,10 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { Skull, Sparkles, ArrowRight, Search, FileText, Code2 } from "lucide-react";
+import { Sparkles, ArrowRight, Search, FileText, Code2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const SUGGESTED_PROMPTS = [
@@ -50,7 +51,13 @@ export function Hero() {
             className="space-y-8"
           >
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border bg-card/60 text-sm">
-              <Skull className="h-4 w-4 text-primary" />
+              <Image
+                src="/brand/bytereaper-mark.svg"
+                alt="ByteReaper logo"
+                width={16}
+                height={16}
+                className="h-4 w-4"
+              />
               <span className="font-medium">ByteReaper • AI Dev Co-pilot</span>
             </div>
 

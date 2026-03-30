@@ -1,0 +1,24 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="gradStroke" x1="48" y1="28" x2="208" y2="228" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E5E7EB"/>
+      <stop offset="0.56" stop-color="#9CA3AF"/>
+      <stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+    <linearGradient id="gradEyes" x1="100" y1="98" x2="156" y2="126" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#60A5FA"/>
+      <stop offset="1" stop-color="#93C5FD"/>
+    </linearGradient>
+  </defs>
+
+  <path d="M128 28C79.4 28 46 61.8 46 109.6C46 141.7 61.6 165.9 86.6 180.1V193.5C86.6 211.5 101.2 226 119.1 226H136.9C154.8 226 169.4 211.5 169.4 193.5V180.1C194.4 165.9 210 141.7 210 109.6C210 61.8 176.6 28 128 28Z" stroke="url(#gradStroke)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <circle cx="98" cy="108" r="14" fill="url(#gradEyes)"/>
+  <circle cx="158" cy="108" r="14" fill="url(#gradEyes)"/>
+
+  <path d="M108 160C112.7 152 121.1 147 130 147C138.9 147 147.3 152 152 160" stroke="url(#gradStroke)" stroke-width="10" stroke-linecap="round"/>
+
+  <path d="M112 186V202" stroke="url(#gradStroke)" stroke-width="10" stroke-linecap="round"/>
+  <path d="M128 186V206" stroke="url(#gradStroke)" stroke-width="10" stroke-linecap="round"/>
+  <path d="M144 186V202" stroke="url(#gradStroke)" stroke-width="10" stroke-linecap="round"/>
+</svg>

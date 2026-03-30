@@ -12,6 +12,14 @@ export const metadata: Metadata = {
   title: "ByteReaper - AI Code Analysis Agent",
   description: "Analyze your GitHub repositories with AI. Get actionable insights on code quality, security, performance, and architecture.",
   keywords: ["code analysis", "github", "AI", "code review", "security", "performance"],
+  icons: {
+    icon: [
+      { url: "/brand/bytereaper-mark.svg", type: "image/svg+xml" },
+      { url: "/icon.svg", type: "image/svg+xml" },
+    ],
+    shortcut: ["/brand/bytereaper-mark.svg"],
+    apple: ["/brand/bytereaper-mark.svg"],
+  },
 };
 
 export default function RootLayout({

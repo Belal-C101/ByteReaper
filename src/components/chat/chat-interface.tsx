@@ -435,37 +435,42 @@ export function ChatInterface() {
     const newAttachments: FileAttachment[] = [];
 
     for (const file of Array.from(files)) {
-      if (file.size > MAX_ATTACHMENT_SIZE_BYTES) {
-        setChatError(
-          `"${file.name}" is too large. Keep files under ${Math.round(
-            MAX_ATTACHMENT_SIZE_BYTES / 1024
-          )}KB for Firestore storage.`
-        );
-        continue;
-      }
-
-      const fileType = getFileType(file);
-      let content: string | undefined;
-      let preview: string | undefined;
-
-      if (fileType === "code" || fileType === "text") {
-        content = await file.text();
-      } else {
-        const dataUrl = await readFileAsDataUrl(file);
-        content = dataUrl;
-        if (fileType === "image") {
-          preview = dataUrl;
+      try {
+        if (file.size > MAX_ATTACHMENT_SIZE_BYTES) {
+          setChatError(
+            `"${file.name}" is too large. Keep files under ${Math.round(
+              MAX_ATTACHMENT_SIZE_BYTES / 1024
+            )}KB for Firestore storage.`
+          );
+          continue;
         }
-      }
 
-      newAttachments.push({
-        id: generateId(),
-        name: file.name,
-        type: file.type || `application/${file.name.split(".").pop()}`,
-        size: file.size,
-        content,
-        preview,
-      });
+        const fileType = getFileType(file);
+        let content: string | undefined;
+        let preview: string | undefined;
+
+        if (fileType === "code" || fileType === "text") {
+          content = await file.text();
+        } else {
+          const dataUrl = await readFileAsDataUrl(file);
+          content = dataUrl;
+          if (fileType === "image") {
+            preview = dataUrl;
+          }
+        }
+
+        newAttachments.push({
+          id: generateId(),
+          name: file.name,
+          type: file.type || `application/${file.name.split(".").pop()}`,
+          size: file.size,
+          content,
+          preview,
+        });
+      } catch (fileError) {
+        console.error(`Failed to process attachment ${file.name}:`, fileError);
+        setChatError(`Could not attach "${file.name}". Try a different file.`);
+      }
     }
 
     if (newAttachments.length > 0) {
@@ -713,9 +718,11 @@ export function ChatInterface() {
   const friendlyName = getFriendlyName(user?.displayName, user?.email);
 
   return (
-    <div className="flex h-[calc(100vh-8rem)] w-full border-y overflow-hidden bg-background/40">
+    <div className="relative flex h-[calc(100vh-8rem)] w-full border-y overflow-hidden bg-background/40">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_62%_34%,rgba(59,130,246,0.14),transparent_42%),radial-gradient(circle_at_16%_78%,rgba(163,163,163,0.12),transparent_45%)]" />
+
       {/* Chat History Sidebar */}
-      <aside className="hidden md:flex md:w-72 md:flex-col border-r bg-card/30">
+      <aside className="relative hidden md:flex md:w-72 md:flex-col border-r bg-card/40 backdrop-blur">
         <div className="p-4 border-b">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Chat History</h2>

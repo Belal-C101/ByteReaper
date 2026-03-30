@@ -31,6 +31,17 @@ service cloud.firestore {
     function isEmailOwner(emailId) {
       return hasAuthEmail() && request.auth.token.email == emailId;
     }
+
+    // Helper to get a chat session document path
+    function chatSessionPath(sessionId) {
+      return /databases/$(database)/documents/chatSessions/$(sessionId);
+    }
+
+    // Helper to ensure a chat session belongs to current user
+    function ownsSession(sessionId) {
+      return exists(chatSessionPath(sessionId)) &&
+             get(chatSessionPath(sessionId)).data.userId == request.auth.uid;
+    }
     
     // Users collection - users can only read/write their own profile using email doc IDs
     match /users/{emailId} {
@@ -54,7 +65,8 @@ service cloud.firestore {
                        request.resource.data.title is string &&
                        request.resource.data.model is string;
       allow update: if isAuthenticated() && 
-                       resource.data.userId == request.auth.uid;
+                       resource.data.userId == request.auth.uid &&
+                       request.resource.data.userId == resource.data.userId;
       allow delete: if isAuthenticated() && 
                        resource.data.userId == request.auth.uid;
     }
@@ -66,6 +78,7 @@ service cloud.firestore {
       allow create: if isAuthenticated() && 
                        request.resource.data.userId == request.auth.uid &&
                        request.resource.data.sessionId is string &&
+                       ownsSession(request.resource.data.sessionId) &&
                        request.resource.data.role in ['user', 'assistant'] &&
                        request.resource.data.content is string;
       allow update: if false; // Messages should not be updated

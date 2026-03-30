@@ -75,6 +75,22 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+function isPermissionDeniedError(error: unknown): boolean {
+  const errorCode = (error as any)?.code;
+  const errorMessage = (error as any)?.message;
+
+  return (
+    errorCode === "permission-denied" ||
+    errorCode === "firestore/permission-denied" ||
+    (typeof errorMessage === "string" && errorMessage.toLowerCase().includes("permission-denied")) ||
+    (typeof errorMessage === "string" && errorMessage.toLowerCase().includes("insufficient permissions"))
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function formatSessionDate(date: Date): string {
   const now = new Date();
   const isSameDay = now.toDateString() === date.toDateString();
@@ -114,9 +130,15 @@ const AI_MODELS = {
 
 type ModelKey = keyof typeof AI_MODELS;
 
+type FileLike = {
+  name: string;
+  type?: string | null;
+};
+
 // File type detection
-function getFileType(file: File): "code" | "image" | "text" | "other" {
+function getFileType(file: FileLike): "code" | "image" | "text" | "other" {
   const ext = file.name.split(".").pop()?.toLowerCase() || "";
+  const mimeType = file.type ?? "";
   const codeExts = [
     "js",
     "ts",
@@ -145,7 +167,7 @@ function getFileType(file: File): "code" | "image" | "text" | "other" {
 
   if (codeExts.includes(ext)) return "code";
   if (imageExts.includes(ext)) return "image";
-  if (file.type.startsWith("text/")) return "text";
+  if (mimeType.startsWith("text/")) return "text";
   return "other";
 }
 
@@ -238,6 +260,34 @@ export function ChatInterface() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  const createSessionWithRetry = useCallback(async (): Promise<string> => {
+    if (!user) {
+      throw new Error("You must be logged in to create a chat session.");
+    }
+
+    const retryDelays = [0, 400, 900];
+    let lastError: unknown = null;
+
+    for (const delay of retryDelays) {
+      if (delay > 0) {
+        await sleep(delay);
+      }
+
+      try {
+        await user.getIdToken(true);
+        return await createChatSession(user.uid, "New Chat", selectedModel);
+      } catch (error) {
+        lastError = error;
+
+        if (!isPermissionDeniedError(error)) {
+          throw error;
+        }
+      }
+    }
+
+    throw lastError ?? new Error("Failed to create chat session.");
+  }, [user, selectedModel]);
+
   const loadSessions = useCallback(
     async (preferredSessionId?: string | null) => {
       if (!user) return;
@@ -254,7 +304,7 @@ export function ChatInterface() {
             return;
           }
 
-          const createdSessionId = await createChatSession(user.uid, "New Chat", selectedModel);
+          const createdSessionId = await createSessionWithRetry();
           fetchedSessions = await getChatSessions(user.uid);
           setSessions(fetchedSessions);
           setSessionId(createdSessionId);
@@ -275,12 +325,18 @@ export function ChatInterface() {
         }
       } catch (error) {
         console.error("Failed to load chat sessions:", error);
-        setChatError(getErrorMessage(error, "Could not load chat history right now."));
+        if (isPermissionDeniedError(error)) {
+          setChatError(
+            "Firestore denied access. Publish the latest Firestore rules for this project, then refresh the page."
+          );
+        } else {
+          setChatError(getErrorMessage(error, "Could not load chat history right now."));
+        }
       } finally {
         setIsHistoryLoading(false);
       }
     },
-    [user, selectedModel, sessionId]
+    [user, sessionId, createSessionWithRetry]
   );
 
   useEffect(() => {
@@ -357,16 +413,21 @@ export function ChatInterface() {
     setChatError(null);
 
     try {
-      await user.getIdToken();
-      const createdSessionId = await createChatSession(user.uid, "New Chat", selectedModel);
+      const createdSessionId = await createSessionWithRetry();
       setSessionId(createdSessionId);
       setMessages([]);
       await loadSessions(createdSessionId);
     } catch (error) {
       console.error("Failed to create new chat:", error);
-      setChatError(getErrorMessage(error, "Failed to create a new chat. Please try again."));
+      if (isPermissionDeniedError(error)) {
+        setChatError(
+          "Failed to create chat session (permission-denied). Publish Firestore rules in Firebase Console, then refresh."
+        );
+      } else {
+        setChatError(getErrorMessage(error, "Failed to create a new chat. Please try again."));
+      }
     }
-  }, [user, isLoading, selectedModel, loadSessions]);
+  }, [user, isLoading, loadSessions, createSessionWithRetry]);
 
   // Handle file upload
   const handleFileUpload = useCallback(async (files: FileList) => {
@@ -445,15 +506,21 @@ export function ChatInterface() {
     let canPersistToFirestore = true;
     if (!activeSessionId) {
       try {
-        activeSessionId = await createChatSession(user.uid, "New Chat", selectedModel);
+        activeSessionId = await createSessionWithRetry();
         setSessionId(activeSessionId);
         await loadSessions(activeSessionId);
       } catch (error) {
         console.error("Failed to initialize chat session:", error);
         canPersistToFirestore = false;
-        setChatError(
-          "Chat history is unavailable right now. You can still send messages, but they may not be saved."
-        );
+        if (isPermissionDeniedError(error)) {
+          setChatError(
+            "Chat history is blocked by Firestore rules (permission-denied). You can still chat, but data will not save until rules are published."
+          );
+        } else {
+          setChatError(
+            "Chat history is unavailable right now. You can still send messages, but they may not be saved."
+          );
+        }
       }
     }
 
@@ -646,7 +713,7 @@ export function ChatInterface() {
   const friendlyName = getFriendlyName(user?.displayName, user?.email);
 
   return (
-    <div className="flex h-[calc(100vh-8rem)] max-w-7xl mx-auto border rounded-2xl overflow-hidden bg-background/40">
+    <div className="flex h-[calc(100vh-8rem)] w-full border-y overflow-hidden bg-background/40">
       {/* Chat History Sidebar */}
       <aside className="hidden md:flex md:w-72 md:flex-col border-r bg-card/30">
         <div className="p-4 border-b">
@@ -700,7 +767,7 @@ export function ChatInterface() {
       </aside>
 
       {/* Main Chat Panel */}
-      <div className="flex-1 flex flex-col">
+      <div className="relative flex-1 flex flex-col">
         {/* Mobile chat header */}
         <div className="md:hidden p-3 border-b flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm">
@@ -727,7 +794,7 @@ export function ChatInterface() {
 
         {/* Messages Area */}
         <div
-          className="flex-1 overflow-y-auto p-4 space-y-4"
+          className="flex-1 overflow-y-auto p-4 space-y-4 pb-56"
           onDrop={handleDrop}
           onDragOver={(e) => e.preventDefault()}
         >
@@ -743,68 +810,69 @@ export function ChatInterface() {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Attachments Preview */}
-        {attachments.length > 0 && (
-          <div className="px-4 py-2 flex flex-wrap gap-2 border-t">
-            {attachments.map((attachment) => (
-              <div
-                key={attachment.id}
-                className="flex items-center gap-2 px-3 py-1.5 bg-secondary rounded-lg text-sm"
-              >
-                <FileIcon type={getFileType({ name: attachment.name } as File)} />
-                <span className="max-w-[180px] truncate">{attachment.name}</span>
-                <button onClick={() => removeAttachment(attachment.id)} className="hover:text-destructive">
-                  <X className="h-3 w-3" />
-                </button>
+        {/* Floating Composer */}
+        <div className="pointer-events-none absolute bottom-4 left-4 right-4 z-20">
+          <div className="pointer-events-auto rounded-2xl border bg-background/95 backdrop-blur-md shadow-2xl p-3 md:p-4">
+            {attachments.length > 0 && (
+              <div className="mb-3 flex flex-wrap gap-2">
+                {attachments.map((attachment) => (
+                  <div
+                    key={attachment.id}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-secondary rounded-lg text-sm"
+                  >
+                    <FileIcon type={getFileType({ name: attachment.name, type: attachment.type })} />
+                    <span className="max-w-[180px] truncate">{attachment.name}</span>
+                    <button onClick={() => removeAttachment(attachment.id)} className="hover:text-destructive">
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        )}
+            )}
 
-        {/* Input Area */}
-        <div className="p-4 border-t">
-          <div className="flex gap-2 items-end">
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              onChange={(e) => e.target.files && void handleFileUpload(e.target.files)}
-            />
+            <div className="flex gap-2 items-end">
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => e.target.files && void handleFileUpload(e.target.files)}
+              />
 
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isLoading}
-              title="Attach files"
-            >
-              <Paperclip className="h-5 w-5" />
-            </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isLoading}
+                title="Attach files"
+              >
+                <Paperclip className="h-5 w-5" />
+              </Button>
 
-            <Textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Ask me anything... (Shift+Enter for new line)"
-              className="flex-1 min-h-[44px] max-h-[200px] resize-none"
-              disabled={isLoading}
-              rows={1}
-            />
+              <Textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Ask me anything... (Shift+Enter for new line)"
+                className="flex-1 min-h-[44px] max-h-[200px] resize-none"
+                disabled={isLoading}
+                rows={1}
+              />
 
-            <Button
-              onClick={() => void sendMessage()}
-              disabled={isLoading || (!input.trim() && attachments.length === 0)}
-              className="h-11"
-            >
-              {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
-            </Button>
-          </div>
+              <Button
+                onClick={() => void sendMessage()}
+                disabled={isLoading || (!input.trim() && attachments.length === 0)}
+                className="h-11"
+              >
+                {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
+              </Button>
+            </div>
 
-          <div className="flex items-center justify-between mt-3">
-            <ModelSelector selectedModel={selectedModel} onSelect={setSelectedModel} disabled={isLoading} />
-            <p className="text-xs text-muted-foreground">Drag & drop files • Stored in Firestore</p>
+            <div className="flex items-center justify-between mt-3">
+              <ModelSelector selectedModel={selectedModel} onSelect={setSelectedModel} disabled={isLoading} />
+              <p className="text-xs text-muted-foreground">Drag & drop files • Stored in Firestore</p>
+            </div>
           </div>
         </div>
       </div>
@@ -871,7 +939,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           <div className="flex flex-wrap gap-2 mb-2">
             {message.attachments.map((attachment) => (
               <Badge key={attachment.id} variant="secondary" className="flex items-center gap-1">
-                <FileIcon type={getFileType({ name: attachment.name } as File)} />
+                <FileIcon type={getFileType({ name: attachment.name, type: attachment.type })} />
                 {attachment.name}
               </Badge>
             ))}

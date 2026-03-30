@@ -37,8 +37,8 @@ export function Hero() {
   return (
     <section className="relative py-16 md:py-24 overflow-hidden">
       <div className="absolute inset-0 -z-10">
-        <div className="absolute top-16 left-24 w-80 h-80 bg-primary/20 rounded-full blur-3xl" />
-        <div className="absolute bottom-10 right-20 w-80 h-80 bg-violet-500/20 rounded-full blur-3xl" />
+        <div className="absolute top-16 left-24 w-80 h-80 bg-zinc-500/15 rounded-full blur-3xl" />
+        <div className="absolute bottom-10 right-20 w-80 h-80 bg-blue-500/20 rounded-full blur-3xl" />
       </div>
 
       <div className="container px-4 mx-auto">

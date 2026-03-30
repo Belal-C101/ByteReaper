@@ -72,7 +72,7 @@ export function AuthWall() {
   return (
     <section className="relative min-h-[calc(100vh-8rem)] overflow-hidden py-8 md:py-12">
       <div className="absolute inset-0 -z-10">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(147,51,234,0.2),transparent_45%),radial-gradient(circle_at_80%_40%,rgba(99,102,241,0.16),transparent_38%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(115,115,115,0.18),transparent_45%),radial-gradient(circle_at_80%_40%,rgba(59,130,246,0.2),transparent_38%)]" />
       </div>
 
       <div className="container px-4 mx-auto">

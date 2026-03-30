@@ -92,6 +92,23 @@ function toReadableFirestoreError(error: any, fallback: string): Error {
   return new Error(fallback);
 }
 
+function getFirestoreErrorCode(error: any): string {
+  if (typeof error?.code === 'string') {
+    return error.code;
+  }
+
+  if (typeof error?.message === 'string' && error.message.includes('permission-denied')) {
+    return 'permission-denied';
+  }
+
+  return '';
+}
+
+function isPermissionDeniedError(error: any): boolean {
+  const code = getFirestoreErrorCode(error);
+  return code === 'permission-denied' || code === 'firestore/permission-denied';
+}
+
 async function getExistingChatNameSet(userId: string): Promise<Set<string>> {
   const activeSnapshot = await getDocs(
     query(
@@ -320,6 +337,54 @@ export async function getSessionMessages(sessionId: string): Promise<ChatMessage
 }
 
 // Save a user+assistant exchange in a grouped message document and track the generating model.
+async function saveLegacyChatExchange(
+  sessionId: string,
+  userId: string,
+  userMessage: ChatMessage,
+  assistantMessage: ChatMessage,
+  model: string
+): Promise<void> {
+  const userTimestamp =
+    userMessage.timestamp instanceof Date
+      ? userMessage.timestamp
+      : new Date(userMessage.timestamp);
+
+  const assistantTimestamp =
+    assistantMessage.timestamp instanceof Date
+      ? assistantMessage.timestamp
+      : new Date(assistantMessage.timestamp);
+
+  await addDoc(collection(db, CHAT_MESSAGES_COLLECTION), {
+    sessionId,
+    userId,
+    id: userMessage.id,
+    role: 'user',
+    content: userMessage.content,
+    timestamp: Timestamp.fromDate(userTimestamp),
+    attachments: userMessage.attachments ?? null,
+    searchResults: null,
+  });
+
+  await addDoc(collection(db, CHAT_MESSAGES_COLLECTION), {
+    sessionId,
+    userId,
+    id: assistantMessage.id,
+    role: 'assistant',
+    content: assistantMessage.content,
+    timestamp: Timestamp.fromDate(assistantTimestamp),
+    attachments: null,
+    searchResults: assistantMessage.searchResults ?? null,
+    error: assistantMessage.error ?? null,
+  });
+
+  await updateDoc(doc(db, CHAT_SESSIONS_COLLECTION, sessionId), {
+    model,
+    isArchived: false,
+    updatedAt: serverTimestamp(),
+    messageCount: increment(2),
+  });
+}
+
 export async function saveChatExchange(
   sessionId: string,
   userId: string,
@@ -327,7 +392,7 @@ export async function saveChatExchange(
   assistantMessage: ChatMessage,
   model: string
 ): Promise<void> {
-  try {
+  const modernExchangeWrite = async () => {
     const sessionRef = doc(db, CHAT_SESSIONS_COLLECTION, sessionId);
     const existingSession = await getDoc(sessionRef);
 
@@ -391,9 +456,24 @@ export async function saveChatExchange(
       },
       { merge: true }
     );
+  };
+
+  try {
+    await modernExchangeWrite();
   } catch (error: any) {
-    console.error('Error saving chat exchange:', error);
-    throw toReadableFirestoreError(error, 'Failed to save chat exchange');
+    if (!isPermissionDeniedError(error)) {
+      console.error('Error saving chat exchange:', error);
+      throw toReadableFirestoreError(error, 'Failed to save chat exchange');
+    }
+
+    console.warn('Modern chat exchange write denied; attempting legacy fallback.', error);
+
+    try {
+      await saveLegacyChatExchange(sessionId, userId, userMessage, assistantMessage, model);
+    } catch (legacyError: any) {
+      console.error('Legacy fallback save failed:', legacyError);
+      throw toReadableFirestoreError(legacyError, 'Failed to save chat exchange');
+    }
   }
 }
 

@@ -91,8 +91,20 @@ service cloud.firestore {
       allow read: if isAuthenticated() &&
                      resource.data.userId == request.auth.uid;
       allow create: if isAuthenticated() &&
-                       request.resource.data.userId == request.auth.uid &&
-                       request.resource.data.title == sessionId;
+                       (
+                         (
+                           request.resource.data.userId == request.auth.uid &&
+                           request.resource.data.title == sessionId
+                         )
+                         ||
+                         (
+                           request.resource.data.sessionId is string &&
+                           request.resource.data.userId == request.auth.uid &&
+                           ownsSession(request.resource.data.sessionId) &&
+                           request.resource.data.role in ['user', 'assistant'] &&
+                           request.resource.data.content is string
+                         )
+                       );
       allow update: if isAuthenticated() &&
                        resource.data.userId == request.auth.uid &&
                        request.resource.data.userId == resource.data.userId &&

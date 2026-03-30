@@ -42,6 +42,17 @@ service cloud.firestore {
       return exists(chatSessionPath(sessionId)) &&
              get(chatSessionPath(sessionId)).data.userId == request.auth.uid;
     }
+
+    // Helper to get archived chat document path
+    function archivedChatPath(sessionId) {
+      return /databases/$(database)/documents/archive chats/$(sessionId);
+    }
+
+    // Helper to ensure archived chat belongs to current user
+    function ownsArchivedChat(sessionId) {
+      return exists(archivedChatPath(sessionId)) &&
+             get(archivedChatPath(sessionId)).data.userId == request.auth.uid;
+    }
     
     // Users collection - users can only read/write their own profile using email doc IDs
     match /users/{emailId} {
@@ -56,34 +67,75 @@ service cloud.firestore {
       allow delete: if isEmailOwner(emailId);
     }
     
-    // Chat sessions - users can only access their own sessions
+    // Chat sessions - document ID must match chat title shown in UI
     match /chatSessions/{sessionId} {
       allow read: if isAuthenticated() && 
                      resource.data.userId == request.auth.uid;
       allow create: if isAuthenticated() && 
                        request.resource.data.userId == request.auth.uid &&
+                       request.resource.data.title == sessionId &&
                        request.resource.data.title is string &&
-                       request.resource.data.model is string;
+                       request.resource.data.model is string &&
+                       request.resource.data.messageCount is int &&
+                       request.resource.data.isArchived is bool;
       allow update: if isAuthenticated() && 
                        resource.data.userId == request.auth.uid &&
-                       request.resource.data.userId == resource.data.userId;
+                       request.resource.data.userId == resource.data.userId &&
+                       request.resource.data.title == sessionId;
       allow delete: if isAuthenticated() && 
                        resource.data.userId == request.auth.uid;
     }
-    
-    // Chat messages - users can only access their own messages
-    match /chatMessages/{messageId} {
-      allow read: if isAuthenticated() && 
+
+    // Chat thread root documents (same ID as chat session name)
+    match /chatMessages/{sessionId} {
+      allow read: if isAuthenticated() &&
                      resource.data.userId == request.auth.uid;
-      allow create: if isAuthenticated() && 
+      allow create: if isAuthenticated() &&
                        request.resource.data.userId == request.auth.uid &&
-                       request.resource.data.sessionId is string &&
-                       ownsSession(request.resource.data.sessionId) &&
-                       request.resource.data.role in ['user', 'assistant'] &&
-                       request.resource.data.content is string;
-      allow update: if false; // Messages should not be updated
-      allow delete: if isAuthenticated() && 
-                       resource.data.userId == request.auth.uid;
+                       request.resource.data.title == sessionId;
+      allow update: if isAuthenticated() &&
+                       resource.data.userId == request.auth.uid &&
+                       request.resource.data.userId == resource.data.userId &&
+                       request.resource.data.title == sessionId;
+      allow delete: if isAuthenticated() &&
+                       (
+                         (resource.data.userId is string && resource.data.userId == request.auth.uid) ||
+                         ownsSession(sessionId)
+                       );
+
+      // Grouped message records for this session
+      match /messages/{messageId} {
+        allow read: if isAuthenticated() && ownsSession(sessionId);
+        allow create: if isAuthenticated() &&
+                         ownsSession(sessionId) &&
+                         request.resource.data.userId == request.auth.uid &&
+                         request.resource.data.sessionId == sessionId &&
+                         request.resource.data.userMessage is string &&
+                         request.resource.data.response is string &&
+                         request.resource.data.model is string;
+        allow update: if false;
+        allow delete: if isAuthenticated() && ownsSession(sessionId);
+      }
+    }
+
+    // Archived chats collection requested by product requirements
+    match /archive chats/{sessionId} {
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() &&
+                       request.resource.data.userId == request.auth.uid &&
+                       request.resource.data.title == sessionId;
+      allow update: if isAuthenticated() &&
+                       (
+                         resource.data.userId == request.auth.uid ||
+                         ownsArchivedChat(sessionId)
+                       ) &&
+                       request.resource.data.userId == request.auth.uid &&
+                       request.resource.data.title == sessionId;
+      allow delete: if isAuthenticated() &&
+                       (
+                         resource.data.userId == request.auth.uid ||
+                         ownsArchivedChat(sessionId)
+                       );
     }
   }
 }

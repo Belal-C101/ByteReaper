@@ -16,6 +16,10 @@ import {
   Sparkles,
   Plus,
   MessageSquare,
+  Archive,
+  Pencil,
+  Trash2,
+  ArchiveRestore,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -28,15 +32,20 @@ import {
   ChatSession,
   createChatSession,
   getChatSessions,
+  getArchivedChatSessions,
   getSessionMessages,
-  saveMessage,
-  updateSessionTitle,
+  saveChatExchange,
+  renameChatSession,
+  deleteChatSession,
+  archiveChatSession,
+  restoreArchivedChatSession,
 } from "@/lib/chat-history";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 const MAX_ATTACHMENT_SIZE_BYTES = 900 * 1024;
+const DRAFT_CHAT_ID_PREFIX = "draft-chat-";
 const EMPTY_STATE_PROMPTS = [
   "Review this React component for performance",
   "Find security issues in my Node API",
@@ -247,6 +256,9 @@ export function ChatInterface() {
   const { user } = useAuth();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [archivedSessions, setArchivedSessions] = useState<ChatSession[]>([]);
+  const [showArchivedChats, setShowArchivedChats] = useState(false);
+  const [draftSession, setDraftSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -260,7 +272,7 @@ export function ChatInterface() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const createSessionWithRetry = useCallback(async (): Promise<string> => {
+  const createSessionWithRetry = useCallback(async (title: string): Promise<string> => {
     if (!user) {
       throw new Error("You must be logged in to create a chat session.");
     }
@@ -275,7 +287,7 @@ export function ChatInterface() {
 
       try {
         await user.getIdToken(true);
-        return await createChatSession(user.uid, "New Chat", selectedModel);
+        return await createChatSession(user.uid, title, selectedModel);
       } catch (error) {
         lastError = error;
 
@@ -288,6 +300,12 @@ export function ChatInterface() {
     throw lastError ?? new Error("Failed to create chat session.");
   }, [user, selectedModel]);
 
+  const isDraftSessionId = useCallback(
+    (candidateId: string | null | undefined) =>
+      Boolean(candidateId && candidateId.startsWith(DRAFT_CHAT_ID_PREFIX)),
+    []
+  );
+
   const loadSessions = useCallback(
     async (preferredSessionId?: string | null) => {
       if (!user) return;
@@ -296,29 +314,25 @@ export function ChatInterface() {
 
       try {
         await user.getIdToken();
-        let fetchedSessions = await getChatSessions(user.uid);
+        const [fetchedSessions, fetchedArchivedSessions] = await Promise.all([
+          getChatSessions(user.uid),
+          getArchivedChatSessions(user.uid),
+        ]);
 
-        if (fetchedSessions.length === 0) {
-          if (preferredSessionId || sessionId) {
-            setSessions([]);
-            return;
-          }
+        setArchivedSessions(fetchedArchivedSessions);
 
-          const createdSessionId = await createSessionWithRetry();
-          fetchedSessions = await getChatSessions(user.uid);
-          setSessions(fetchedSessions);
-          setSessionId(createdSessionId);
-          return;
-        }
+        const mergedSessions = draftSession ? [draftSession, ...fetchedSessions] : fetchedSessions;
 
-        setSessions(fetchedSessions);
+        setSessions(mergedSessions);
 
         const nextSessionId =
-          preferredSessionId && fetchedSessions.some((session) => session.id === preferredSessionId)
+          preferredSessionId && mergedSessions.some((session) => session.id === preferredSessionId)
             ? preferredSessionId
-            : sessionId && fetchedSessions.some((session) => session.id === sessionId)
+            : sessionId && mergedSessions.some((session) => session.id === sessionId)
               ? sessionId
-              : fetchedSessions[0].id;
+              : mergedSessions.length > 0
+                ? mergedSessions[0].id
+                : null;
 
         if (nextSessionId !== sessionId) {
           setSessionId(nextSessionId);
@@ -336,13 +350,15 @@ export function ChatInterface() {
         setIsHistoryLoading(false);
       }
     },
-    [user, sessionId, createSessionWithRetry]
+    [user, sessionId, draftSession]
   );
 
   useEffect(() => {
     if (!user) {
       setSessionId(null);
       setSessions([]);
+      setArchivedSessions([]);
+      setDraftSession(null);
       setMessages([]);
       return;
     }
@@ -352,7 +368,7 @@ export function ChatInterface() {
 
   // Load selected chat messages
   useEffect(() => {
-    if (!sessionId) {
+    if (!sessionId || isDraftSessionId(sessionId)) {
       setMessages([]);
       return;
     }
@@ -381,18 +397,18 @@ export function ChatInterface() {
     return () => {
       isMounted = false;
     };
-  }, [sessionId]);
+  }, [sessionId, isDraftSessionId]);
 
   // Prefill prompt from landing page if available
   useEffect(() => {
-    if (!sessionId) return;
+    if (sessionId && !isDraftSessionId(sessionId)) return;
 
     const pendingPrompt = sessionStorage.getItem("bytereaper_landing_prompt");
     if (pendingPrompt) {
       setInput(pendingPrompt);
       sessionStorage.removeItem("bytereaper_landing_prompt");
     }
-  }, [sessionId]);
+  }, [sessionId, isDraftSessionId]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -412,22 +428,123 @@ export function ChatInterface() {
 
     setChatError(null);
 
-    try {
-      const createdSessionId = await createSessionWithRetry();
-      setSessionId(createdSessionId);
-      setMessages([]);
-      await loadSessions(createdSessionId);
-    } catch (error) {
-      console.error("Failed to create new chat:", error);
-      if (isPermissionDeniedError(error)) {
-        setChatError(
-          "Failed to create chat session (permission-denied). Publish Firestore rules in Firebase Console, then refresh."
-        );
-      } else {
-        setChatError(getErrorMessage(error, "Failed to create a new chat. Please try again."));
+    const draftId = `${DRAFT_CHAT_ID_PREFIX}${Date.now()}`;
+    const now = new Date();
+
+    const nextDraft: ChatSession = {
+      id: draftId,
+      userId: user.uid,
+      title: "New Chat",
+      model: selectedModel,
+      createdAt: now,
+      updatedAt: now,
+      messageCount: 0,
+      isArchived: false,
+      isDraft: true,
+    };
+
+    setDraftSession(nextDraft);
+    setSessions((prev) => [nextDraft, ...prev.filter((session) => !session.isDraft)]);
+    setSessionId(draftId);
+    setMessages([]);
+    setInput("");
+    setAttachments([]);
+  }, [user, isLoading, selectedModel]);
+
+  const handleRenameSession = useCallback(
+    async (session: ChatSession) => {
+      if (!user) return;
+
+      const nextName = window.prompt("Rename chat", session.title);
+      if (!nextName || !nextName.trim()) return;
+
+      setChatError(null);
+
+      try {
+        const renamedSessionId = await renameChatSession(session.id, nextName.trim(), user.uid);
+        const shouldKeepSelected = sessionId === session.id;
+
+        await loadSessions(shouldKeepSelected ? renamedSessionId : null);
+
+        if (shouldKeepSelected) {
+          setSessionId(renamedSessionId);
+        }
+      } catch (error) {
+        console.error("Failed to rename chat:", error);
+        setChatError(getErrorMessage(error, "Could not rename this chat right now."));
       }
-    }
-  }, [user, isLoading, loadSessions, createSessionWithRetry]);
+    },
+    [user, sessionId, loadSessions]
+  );
+
+  const handleArchiveSession = useCallback(
+    async (session: ChatSession) => {
+      if (!user) return;
+
+      setChatError(null);
+
+      try {
+        await archiveChatSession(session.id, user.uid);
+
+        if (sessionId === session.id) {
+          setSessionId(null);
+          setMessages([]);
+        }
+
+        await loadSessions();
+      } catch (error) {
+        console.error("Failed to archive chat:", error);
+        setChatError(getErrorMessage(error, "Could not archive this chat right now."));
+      }
+    },
+    [user, sessionId, loadSessions]
+  );
+
+  const handleRestoreArchivedSession = useCallback(
+    async (session: ChatSession) => {
+      if (!user) return;
+
+      setChatError(null);
+
+      try {
+        await restoreArchivedChatSession(session.id, user.uid);
+        await loadSessions(session.id);
+        setSessionId(session.id);
+      } catch (error) {
+        console.error("Failed to restore archived chat:", error);
+        setChatError(getErrorMessage(error, "Could not restore this archived chat right now."));
+      }
+    },
+    [user, loadSessions]
+  );
+
+  const handleDeleteSession = useCallback(
+    async (session: ChatSession) => {
+      const shouldDelete = window.confirm(`Delete "${session.title}"? This cannot be undone.`);
+      if (!shouldDelete) return;
+
+      setChatError(null);
+
+      try {
+        await deleteChatSession(session.id);
+
+        if (sessionId === session.id) {
+          setSessionId(null);
+          setMessages([]);
+        }
+
+        if (draftSession?.id === session.id) {
+          setDraftSession(null);
+        }
+
+        await loadSessions();
+      } catch (error) {
+        console.error("Failed to delete chat:", error);
+        setChatError(getErrorMessage(error, "Could not delete this chat right now."));
+      }
+    },
+    [sessionId, draftSession, loadSessions]
+  );
 
   // Handle file upload
   const handleFileUpload = useCallback(async (files: FileList) => {
@@ -498,6 +615,11 @@ export function ChatInterface() {
   const sendMessage = async () => {
     if ((!input.trim() && attachments.length === 0) || isLoading || !user) return;
 
+    if (sessionId && archivedSessions.some((session) => session.id === sessionId)) {
+      setChatError("This chat is archived. Restore it before sending new messages.");
+      return;
+    }
+
     setChatError(null);
 
     try {
@@ -507,11 +629,17 @@ export function ChatInterface() {
       return;
     }
 
+    const trimmedInput = input.trim();
+    const normalizedPrompt =
+      trimmedInput ||
+      (attachments.length > 0 ? "Please analyze the attached file(s)." : "");
+
     let activeSessionId = sessionId;
     let canPersistToFirestore = true;
-    if (!activeSessionId) {
+    if (!activeSessionId || isDraftSessionId(activeSessionId)) {
       try {
-        activeSessionId = await createSessionWithRetry();
+        activeSessionId = await createSessionWithRetry(normalizedPrompt || "New Chat");
+        setDraftSession(null);
         setSessionId(activeSessionId);
         await loadSessions(activeSessionId);
       } catch (error) {
@@ -530,12 +658,11 @@ export function ChatInterface() {
     }
 
     const historyForModel = messages.slice(-10);
-    const isFirstRealMessage = historyForModel.length === 0;
 
     const userMessage: ChatMessage = {
       id: generateId(),
       role: "user",
-      content: input.trim(),
+      content: normalizedPrompt,
       timestamp: new Date(),
       attachments: attachments.length > 0 ? [...attachments] : undefined,
     };
@@ -556,8 +683,6 @@ export function ChatInterface() {
     setInput("");
     setAttachments([]);
     setIsLoading(true);
-
-    let userMessagePersisted = false;
 
     try {
       // Use streaming API with model selection
@@ -636,13 +761,7 @@ export function ChatInterface() {
 
       if (canPersistToFirestore && activeSessionId) {
         try {
-          await saveMessage(activeSessionId, user.uid, userMessage);
-          userMessagePersisted = true;
-          await saveMessage(activeSessionId, user.uid, assistantMessage);
-
-          if (isFirstRealMessage && userMessage.content.trim()) {
-            await updateSessionTitle(activeSessionId, userMessage.content.trim().slice(0, 60));
-          }
+          await saveChatExchange(activeSessionId, user.uid, userMessage, assistantMessage, selectedModel);
 
           await loadSessions(activeSessionId);
         } catch (persistError) {
@@ -674,22 +793,14 @@ export function ChatInterface() {
       // Persist user + error response to keep chat history complete
       if (canPersistToFirestore && activeSessionId) {
         try {
-          if (!userMessagePersisted) {
-            await saveMessage(activeSessionId, user.uid, userMessage);
-          }
-
-          await saveMessage(activeSessionId, user.uid, {
+          await saveChatExchange(activeSessionId, user.uid, userMessage, {
             id: assistantId,
             role: "assistant",
             content: fallbackText,
             timestamp: new Date(),
             error: error instanceof Error ? error.message : "Unknown error",
             isStreaming: false,
-          });
-
-          if (isFirstRealMessage && userMessage.content.trim()) {
-            await updateSessionTitle(activeSessionId, userMessage.content.trim().slice(0, 60));
-          }
+          }, selectedModel);
 
           await loadSessions(activeSessionId);
         } catch (persistError) {
@@ -714,7 +825,7 @@ export function ChatInterface() {
     textareaRef.current?.focus();
   };
 
-  const activeSession = sessions.find((session) => session.id === sessionId);
+  const activeSession = [...sessions, ...archivedSessions].find((session) => session.id === sessionId);
   const friendlyName = getFriendlyName(user?.displayName, user?.email);
 
   return (
@@ -739,36 +850,156 @@ export function ChatInterface() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+        <div className="flex-1 overflow-y-auto p-2 space-y-2">
           {isHistoryLoading ? (
             <div className="h-full flex items-center justify-center text-muted-foreground">
               <Loader2 className="h-5 w-5 animate-spin" />
             </div>
-          ) : sessions.length === 0 ? (
-            <div className="text-sm text-muted-foreground p-3">No chats yet. Start a new chat.</div>
           ) : (
-            sessions.map((session) => {
-              const isActive = session.id === sessionId;
+            <>
+              {sessions.length === 0 ? (
+                <div className="text-sm text-muted-foreground p-3">No active chats yet. Start a new chat.</div>
+              ) : (
+                sessions.map((session) => {
+                  const isActive = session.id === sessionId;
 
-              return (
+                  return (
+                    <button
+                      key={session.id}
+                      onClick={() => {
+                        setChatError(null);
+                        setSessionId(session.id);
+                      }}
+                      className={cn(
+                        "group w-full text-left p-3 rounded-lg border transition-colors",
+                        isActive ? "border-primary bg-primary/10" : "border-transparent hover:bg-accent"
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium truncate">{session.title || "Untitled chat"}</p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {session.isDraft
+                              ? "Not saved yet"
+                              : `${formatSessionDate(session.updatedAt)} • ${session.messageCount} messages`}
+                          </p>
+                        </div>
+
+                        {!session.isDraft && (
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleRenameSession(session);
+                              }}
+                              className="p-1.5 rounded hover:bg-background/70"
+                              title="Rename chat"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleArchiveSession(session);
+                              }}
+                              className="p-1.5 rounded hover:bg-background/70"
+                              title="Archive chat"
+                            >
+                              <Archive className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleDeleteSession(session);
+                              }}
+                              className="p-1.5 rounded hover:bg-destructive/20 text-destructive"
+                              title="Delete chat"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+
+              <div className="pt-2 mt-1 border-t">
                 <button
-                  key={session.id}
-                  onClick={() => {
-                    setChatError(null);
-                    setSessionId(session.id);
-                  }}
-                  className={cn(
-                    "w-full text-left p-3 rounded-lg border transition-colors",
-                    isActive ? "border-primary bg-primary/10" : "border-transparent hover:bg-accent"
-                  )}
+                  type="button"
+                  onClick={() => setShowArchivedChats((prev) => !prev)}
+                  className="w-full flex items-center justify-between px-2 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
                 >
-                  <p className="text-sm font-medium truncate">{session.title || "Untitled chat"}</p>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {formatSessionDate(session.updatedAt)} • {session.messageCount} messages
-                  </p>
+                  <span className="flex items-center gap-2">
+                    <Archive className="h-3.5 w-3.5" />
+                    Archived Chats
+                  </span>
+                  <span>{archivedSessions.length}</span>
                 </button>
-              );
-            })
+
+                {showArchivedChats && (
+                  <div className="space-y-1 mt-1">
+                    {archivedSessions.length === 0 ? (
+                      <div className="text-xs text-muted-foreground px-2 py-2">No archived chats yet.</div>
+                    ) : (
+                      archivedSessions.map((session) => (
+                        <button
+                          key={session.id}
+                          onClick={() => {
+                            setChatError(null);
+                            setSessionId(session.id);
+                          }}
+                          className={cn(
+                            "group w-full text-left p-2.5 rounded-lg border transition-colors",
+                            session.id === sessionId
+                              ? "border-primary bg-primary/10"
+                              : "border-transparent hover:bg-accent"
+                          )}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium truncate">{session.title}</p>
+                              <p className="text-xs text-muted-foreground mt-1">
+                                {formatSessionDate(session.updatedAt)} • {session.messageCount} messages
+                              </p>
+                            </div>
+
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void handleRestoreArchivedSession(session);
+                                }}
+                                className="p-1.5 rounded hover:bg-background/70"
+                                title="Restore chat"
+                              >
+                                <ArchiveRestore className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void handleDeleteSession(session);
+                                }}
+                                className="p-1.5 rounded hover:bg-destructive/20 text-destructive"
+                                title="Delete chat"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            </>
           )}
         </div>
       </aside>

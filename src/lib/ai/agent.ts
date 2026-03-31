@@ -144,16 +144,43 @@ export async function processAgentMessage(
   // Build attachment context with improved formatting
   const attachmentContext = buildAttachmentContext(attachments);
 
-  const userContent = `Previous conversation:\n${historyContext || '(New conversation)'}\n${attachmentContext}\n${searchContext}\n\nUser: ${userMessage}`;
+  const userContentString = `Previous conversation:\n${historyContext || '(New conversation)'}\n${attachmentContext}\n${searchContext}\n\nUser: ${userMessage}`;
+
+  let finalUserContent: any = userContentString;
+  const hasImages = attachments.some(a => {
+    const ext = a.name.split('.').pop()?.toLowerCase() || '';
+    return a.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
+  });
+
+  if (hasImages) {
+    const contentArray: any[] = [{ type: 'text', text: userContentString }];
+    for (const a of attachments) {
+      const ext = a.name.split('.').pop()?.toLowerCase() || '';
+      const isImage = a.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
+      if (isImage && a.content?.startsWith('data:image/')) {
+        contentArray.push({
+          type: 'image_url',
+          image_url: { url: a.content }
+        });
+      }
+    }
+    finalUserContent = contentArray;
+  }
 
   // Build system prompt based on features
   const systemPrompt = buildSystemPrompt(features);
 
+  // If using an image, we MUST use a vision model in callOpenRouter
+  let activeModelKey = modelKey;
+  if (hasImages && activeModelKey !== 'gemini-flash') {
+    activeModelKey = 'gemini-flash';
+  }
+
   try {
     const response = await callOpenRouter([
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: userContent },
-    ], modelKey);
+      { role: 'user', content: finalUserContent },
+    ], activeModelKey);
 
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content || '';
@@ -190,8 +217,9 @@ function buildAttachmentContext(attachments: FileAttachment[]): string {
     const sizeKB = Math.round(a.size / 1024);
 
     if (isImage) {
-      // Free models can't see images — provide metadata
-      contentBlock = `[Image file: ${a.name}, Type: ${a.type}, Size: ${sizeKB}KB]\nNote: This is an image file. Describe what you can infer from the filename and context. If the user asks about its content, let them know you can analyze text/code files in detail but image vision requires a multimodal model.`;
+      // For multimodal models, the actual image is attached separately.
+      // We still provide metadata here.
+      contentBlock = `[Image file attached: ${a.name}, Type: ${a.type}, Size: ${sizeKB}KB]`;
     } else if (isPDF) {
       // Try to extract readable text from base64 PDF content
       const textContent = a.content?.startsWith('data:') ? extractTextFromBase64(a.content) : (a.content || '');
@@ -289,6 +317,17 @@ export async function* streamAgentMessage(
 
   console.log(`[ByteReaper] Using model: ${model.id}`);
 
+  const hasImages = attachments.some(a => {
+    const ext = a.name.split('.').pop()?.toLowerCase() || '';
+    return a.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
+  });
+
+  let activeModelId = model.id;
+  if (hasImages && modelKey !== 'gemini-flash' && !model.id.includes('auto') && !model.id.includes('claude') && !model.id.includes('openai') && !model.id.includes('gemini')) {
+    activeModelId = AI_MODELS['gemini-flash'].id;
+    console.log(`[ByteReaper] Vision required: Auto-switched to multimodal model (${activeModelId})`);
+  }
+
   // ── Search (if web search enabled or intent detected) ──
   let searchContext = '';
   const searchIntent = features.webSearch ? userMessage : detectSearchIntent(userMessage);
@@ -314,7 +353,24 @@ export async function* streamAgentMessage(
 
   const attachmentContext = buildAttachmentContext(attachments);
 
-  const userContent = `Previous conversation:\n${historyContext || '(New conversation)'}\n${attachmentContext}\n${searchContext}\n\nUser: ${userMessage}`;
+  const userContentString = `Previous conversation:\n${historyContext || '(New conversation)'}\n${attachmentContext}\n${searchContext}\n\nUser: ${userMessage}`;
+
+  let finalUserContent: any = userContentString;
+
+  if (hasImages) {
+    const contentArray: any[] = [{ type: 'text', text: userContentString }];
+    for (const a of attachments) {
+      const ext = a.name.split('.').pop()?.toLowerCase() || '';
+      const isImage = a.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
+      if (isImage && a.content?.startsWith('data:image/')) {
+        contentArray.push({
+          type: 'image_url',
+          image_url: { url: a.content }
+        });
+      }
+    }
+    finalUserContent = contentArray;
+  }
 
   // Build system prompt based on features
   const systemPrompt = buildSystemPrompt(features);
@@ -329,10 +385,10 @@ export async function* streamAgentMessage(
         'X-Title': 'ByteReaper',
       },
       body: JSON.stringify({
-        model: model.id,
+        model: activeModelId,
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: userContent },
+          { role: 'user', content: finalUserContent },
         ],
         temperature: features.studyMode ? 0.5 : 0.7,
         max_tokens: 8192,

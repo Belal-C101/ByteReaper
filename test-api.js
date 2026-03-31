@@ -2,7 +2,7 @@
 // Run with: node test-api.js
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const API_KEY = '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';
+const API_KEY = 'API HERE';
 
 // Verified FREE models on OpenRouter (March 2026)
 const MODELS = [

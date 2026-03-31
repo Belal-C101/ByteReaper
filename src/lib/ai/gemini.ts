@@ -15,6 +15,12 @@ export const AI_MODELS = {
     description: '🎲 Auto-select',
     provider: 'OpenRouter',
   },
+  'gemini-flash': {
+    id: 'google/gemini-2.0-flash-lite-preview-02-05:free',
+    name: 'Gemini 2.0 Flash',
+    description: '👁️ Vision + Fast',
+    provider: 'Google',
+  },
   'nemotron': {
     id: 'nvidia/nemotron-3-super-120b-a12b:free',
     name: 'Nemotron 3 Super 120B',

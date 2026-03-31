@@ -4,9 +4,9 @@ rules_version = '2';
  * Firestore Security Rules for ByteReaper
  * 
  * Single-document architecture:
- * - `chat_session/{sessionId}` — each doc holds the full conversation as a messages array
- * - `archive chats/{sessionId}` — archived chats with the same structure
- * - `users/{emailId}` — user profiles keyed by email
+ * - chat_session/{sessionId} — each doc holds the full conversation as a messages array
+ * - archived_chats/{sessionId} — archived chats with the same structure
+ * - users/{emailId} — user profiles keyed by email
  */
 
 service cloud.firestore {
@@ -70,7 +70,7 @@ service cloud.firestore {
 
     // ─── Archived Chats ────────────────────────────
 
-    match /archive chats/{sessionId} {
+    match /archived_chats/{sessionId} {
       allow read: if isAuthenticated() &&
                      resource.data.userId == request.auth.uid;
 

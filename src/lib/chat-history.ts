@@ -20,7 +20,7 @@ import { db } from './firebase';
 import { ChatMessage } from '@/types/chat';
 
 const CHAT_SESSION_COLLECTION = 'chat_session';
-const ARCHIVED_CHATS_COLLECTION = 'archive chats';
+const ARCHIVED_CHATS_COLLECTION = 'archived_chats';
 
 export interface MessagePair {
   userMessage: string;

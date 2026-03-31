@@ -497,34 +497,12 @@ export function ChatInterface() {
       return;
     }
     setChatError(null);
-    try { await user.getIdToken(); } catch {
-      setChatError("Your session expired. Please sign in again.");
-      return;
-    }
 
     const trimmedInput = input.trim();
     const normalizedPrompt = trimmedInput || (attachments.length > 0 ? "Please analyze the attached file(s)." : "");
-    let activeSessionId = sessionId;
-    let canPersistToFirestore = true;
-
-    if (!activeSessionId || isDraftSessionId(activeSessionId)) {
-      try {
-        activeSessionId = await createSessionWithRetry(normalizedPrompt || "New Chat");
-        setDraftSession(null);
-        setSessionId(activeSessionId);
-        await loadSessions(activeSessionId);
-      } catch (error) {
-        console.error("Failed to initialize chat session:", error);
-        canPersistToFirestore = false;
-        setChatError(isPermissionDeniedError(error)
-          ? "Chat history is blocked by Firestore rules. You can still chat, but data won't save."
-          : "Chat history is unavailable. Messages may not be saved."
-        );
-      }
-    }
-
     const historyForModel = messages.slice(-10);
     let modelUsedForExchange = selectedModel;
+    const needsNewSession = !sessionId || isDraftSessionId(sessionId);
 
     const userMessage: ChatMessage = {
       id: generateId(), role: "user", content: normalizedPrompt,
@@ -532,6 +510,7 @@ export function ChatInterface() {
     };
     const assistantId = generateId();
 
+    // Show messages and start loading IMMEDIATELY — no Firestore blocking
     setMessages((prev) => [
       ...prev,
       userMessage,
@@ -540,6 +519,7 @@ export function ChatInterface() {
     setInput(""); setAttachments([]); setIsLoading(true);
 
     try {
+      // Fire the API call INSTANTLY
       const response = await fetch("/api/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -593,39 +573,62 @@ export function ChatInterface() {
         : m
       ));
 
-      if (canPersistToFirestore && activeSessionId) {
-        try {
-          await saveChatExchange(activeSessionId, user.uid, userMessage, assistantMessage, modelUsedForExchange);
-          await loadSessions(activeSessionId);
-        } catch (persistError) {
-          console.error("Failed to save chat exchange:", persistError);
-          setChatError(getErrorMessage(persistError, "Message sent, but chat history could not be saved."));
-        }
-      }
+      // NOW persist to Firestore in the background (after AI responded)
+      persistExchange(user, needsNewSession, normalizedPrompt, userMessage, assistantMessage, modelUsedForExchange);
     } catch (error) {
       console.error("Chat error:", error);
       const fallbackText = error instanceof Error
         ? `Sorry, I encountered an error: ${error.message}`
         : "Sorry, I encountered an error. Please try again.";
 
+      const errorAssistantMessage: ChatMessage = {
+        id: assistantId, role: "assistant", content: fallbackText,
+        timestamp: new Date(), error: error instanceof Error ? error.message : "Unknown error", isStreaming: false,
+      };
+
       setMessages((prev) => prev.map((m) => m.id === assistantId
-        ? { ...m, content: fallbackText, isStreaming: false, error: error instanceof Error ? error.message : "Unknown error", timestamp: new Date() }
+        ? { ...m, content: fallbackText, isStreaming: false, error: errorAssistantMessage.error, timestamp: new Date() }
         : m
       ));
 
-      if (canPersistToFirestore && activeSessionId) {
-        try {
-          await saveChatExchange(activeSessionId, user.uid, userMessage, {
-            id: assistantId, role: "assistant", content: fallbackText,
-            timestamp: new Date(), error: error instanceof Error ? error.message : "Unknown error", isStreaming: false,
-          }, modelUsedForExchange);
-          await loadSessions(activeSessionId);
-        } catch (persistError) {
-          console.error("Failed to persist failed chat exchange:", persistError);
-        }
-      }
+      // Persist error exchange in background
+      persistExchange(user, needsNewSession, normalizedPrompt, userMessage, errorAssistantMessage, modelUsedForExchange);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Background Firestore persistence — never blocks the UI
+  const persistExchange = async (
+    currentUser: NonNullable<typeof user>,
+    needsNewSession: boolean,
+    sessionTitle: string,
+    userMsg: ChatMessage,
+    assistantMsg: ChatMessage,
+    model: string
+  ) => {
+    try {
+      let targetSessionId = sessionId;
+
+      if (needsNewSession) {
+        try {
+          await currentUser.getIdToken(true);
+          targetSessionId = await createChatSession(currentUser.uid, sessionTitle || "New Chat", model);
+          setDraftSession(null);
+          setSessionId(targetSessionId);
+        } catch (sessionError) {
+          console.error("Background session creation failed:", sessionError);
+          return; // Silently fail — user already has their AI response
+        }
+      }
+
+      if (targetSessionId && !targetSessionId.startsWith(DRAFT_CHAT_ID_PREFIX)) {
+        await saveChatExchange(targetSessionId, currentUser.uid, userMsg, assistantMsg, model);
+        await loadSessions(targetSessionId);
+      }
+    } catch (persistError) {
+      console.error("Background persist failed:", persistError);
+      // Don't show errors for background persistence — the user already has their answer
     }
   };
 
@@ -948,10 +951,10 @@ export function ChatInterface() {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  // onFocus={() => setComposerFocused(true)}
+                  onFocus={() => setComposerFocused(true)}
                   onBlur={() => setComposerFocused(false)}
                   placeholder="Ask me anything…"
-                  className="flex-1 min-h-[40px] max-h-[200px] resize-none bg-transparent outline-none text-sm placeholder:text-muted-foreground/40 py-2"
+                  className="flex-1 min-h-[40px] max-h-[200px] resize-none bg-transparent outline-none ring-0 focus:ring-0 focus:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 border-none text-sm placeholder:text-muted-foreground/40 py-2"
                   disabled={isLoading}
                   rows={1}
                 />

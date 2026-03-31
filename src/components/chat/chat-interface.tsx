@@ -948,7 +948,7 @@ export function ChatInterface() {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  onFocus={() => setComposerFocused(true)}
+                  // onFocus={() => setComposerFocused(true)}
                   onBlur={() => setComposerFocused(false)}
                   placeholder="Ask me anything…"
                   className="flex-1 min-h-[40px] max-h-[200px] resize-none bg-transparent outline-none text-sm placeholder:text-muted-foreground/40 py-2"

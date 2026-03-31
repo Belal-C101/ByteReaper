@@ -50,7 +50,6 @@ const config: Config = {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
-        // Severity colors
         critical: {
           DEFAULT: "hsl(var(--critical))",
           foreground: "hsl(var(--critical-foreground))",
@@ -93,12 +92,43 @@ const config: Config = {
         shimmer: {
           "100%": { transform: "translateX(100%)" },
         },
+        "fade-in": {
+          from: { opacity: "0", transform: "translateY(8px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
+        },
+        "fade-in-up": {
+          from: { opacity: "0", transform: "translateY(16px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
+        },
+        "scale-in": {
+          from: { opacity: "0", transform: "scale(0.96)" },
+          to: { opacity: "1", transform: "scale(1)" },
+        },
+        float: {
+          "0%, 100%": { transform: "translateY(0px)" },
+          "50%": { transform: "translateY(-6px)" },
+        },
+        "gradient-shift": {
+          "0%": { backgroundPosition: "0% 50%" },
+          "50%": { backgroundPosition: "100% 50%" },
+          "100%": { backgroundPosition: "0% 50%" },
+        },
+        "dot-pulse": {
+          "0%, 80%, 100%": { transform: "scale(0.6)", opacity: "0.4" },
+          "40%": { transform: "scale(1)", opacity: "1" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
         "pulse-glow": "pulse-glow 2s ease-in-out infinite",
         shimmer: "shimmer 2s infinite",
+        "fade-in": "fade-in 0.4s ease-out",
+        "fade-in-up": "fade-in-up 0.5s ease-out",
+        "scale-in": "scale-in 0.3s ease-out",
+        float: "float 3s ease-in-out infinite",
+        "gradient-shift": "gradient-shift 8s ease infinite",
+        "dot-pulse": "dot-pulse 1.4s infinite ease-in-out",
       },
     },
   },

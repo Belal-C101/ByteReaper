@@ -1,7 +1,6 @@
 // Firestore Chat History Service — Single-Document Architecture
 // Each chat session is a single document in `chat_session` containing all messages.
 import {
-  arrayUnion,
   collection,
   deleteDoc,
   doc,
@@ -14,7 +13,6 @@ import {
   Timestamp,
   updateDoc,
   where,
-  writeBatch,
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { ChatMessage } from '@/types/chat';
@@ -373,9 +371,14 @@ export async function saveChatExchange(
         updatedAt: serverTimestamp(),
       });
     } else {
-      // Append to existing messages array
+      // Read existing messages, push new pair, write back
+      // (arrayUnion is unreliable with complex objects containing Timestamps)
+      const existingData = existingSession.data();
+      const existingMessages = Array.isArray(existingData.messages) ? [...existingData.messages] : [];
+      existingMessages.push(messagePair);
+
       await updateDoc(sessionRef, {
-        messages: arrayUnion(messagePair),
+        messages: existingMessages,
         model,
         updatedAt: serverTimestamp(),
       });

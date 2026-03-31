@@ -50,6 +50,7 @@ service cloud.firestore {
       allow read: if isAuthenticated() &&
                      resource.data.userId == request.auth.uid;
 
+      // userEmail is optional — not all clients send it
       allow create: if isAuthenticated() &&
                        request.resource.data.userId == request.auth.uid &&
                        request.resource.data.title == sessionId &&

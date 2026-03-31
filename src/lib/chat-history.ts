@@ -20,12 +20,20 @@ import { ChatMessage } from '@/types/chat';
 const CHAT_SESSION_COLLECTION = 'chat_session';
 const ARCHIVED_CHATS_COLLECTION = 'archived_chats';
 
+/** Lightweight attachment metadata stored in Firestore (no binary content). */
+export interface StoredAttachment {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+}
+
 export interface MessagePair {
   userMessage: string;
   response: string;
   model: string;
   timestamp: Timestamp | Date | string;
-  userAttachments?: ChatMessage['attachments'] | null;
+  userAttachments?: StoredAttachment[] | null;
   searchResults?: ChatMessage['searchResults'] | null;
   userMessageId: string;
   assistantMessageId: string;
@@ -35,6 +43,7 @@ export interface MessagePair {
 export interface ChatSession {
   id: string;
   userId: string;
+  userEmail?: string;
   title: string;
   model: string;
   createdAt: Date;
@@ -45,6 +54,17 @@ export interface ChatSession {
 }
 
 // ─── Helpers ───────────────────────────────────────────────
+
+/**
+ * Strip binary content from attachments to stay under Firestore's 1 MB document limit.
+ * Only keep lightweight metadata (id, name, type, size).
+ */
+function sanitizeAttachmentsForStorage(
+  attachments: ChatMessage['attachments'] | null | undefined
+): StoredAttachment[] | null {
+  if (!attachments || attachments.length === 0) return null;
+  return attachments.map((a) => ({ id: a.id, name: a.name, type: a.type, size: a.size }));
+}
 
 function parseFirestoreDate(value: unknown): Date {
   if (value instanceof Timestamp) {
@@ -167,6 +187,7 @@ function mapSessionDocToSession(sessionId: string, data: any, fallbackArchived =
   return {
     id: sessionId,
     userId: data.userId,
+    userEmail: typeof data.userEmail === 'string' ? data.userEmail : undefined,
     title: data.title ?? sessionId,
     model: data.model ?? 'auto',
     createdAt: parseFirestoreDate(data.createdAt),
@@ -179,12 +200,17 @@ function mapSessionDocToSession(sessionId: string, data: any, fallbackArchived =
 // ─── CRUD Operations ───────────────────────────────────────
 
 /** Create a new chat session with an empty messages array. */
-export async function createChatSession(userId: string, title: string, model: string): Promise<string> {
+export async function createChatSession(
+  userId: string,
+  title: string,
+  model: string,
+  userEmail?: string | null
+): Promise<string> {
   try {
     const uniqueTitle = await ensureUniqueChatName(userId, title);
     const sessionRef = doc(db, CHAT_SESSION_COLLECTION, uniqueTitle);
 
-    await setDoc(sessionRef, {
+    const sessionData: Record<string, unknown> = {
       userId,
       title: uniqueTitle,
       model,
@@ -192,7 +218,10 @@ export async function createChatSession(userId: string, title: string, model: st
       isArchived: false,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
-    });
+    };
+    if (userEmail) sessionData.userEmail = userEmail;
+
+    await setDoc(sessionRef, sessionData);
 
     return uniqueTitle;
   } catch (error: any) {
@@ -336,7 +365,8 @@ export async function saveChatExchange(
   userId: string,
   userMessage: ChatMessage,
   assistantMessage: ChatMessage,
-  model: string
+  model: string,
+  userEmail?: string | null
 ): Promise<void> {
   try {
     const sessionRef = doc(db, CHAT_SESSION_COLLECTION, sessionId);
@@ -347,12 +377,14 @@ export async function saveChatExchange(
         ? assistantMessage.timestamp
         : new Date(assistantMessage.timestamp);
 
+    // CRITICAL: Strip binary content from attachments to stay under Firestore 1 MB limit.
+    // Only store metadata (id, name, type, size) — not the base64 data URLs.
     const messagePair: MessagePair = {
       userMessage: userMessage.content,
       response: assistantMessage.content,
       model,
       timestamp: Timestamp.fromDate(exchangeTimestamp),
-      userAttachments: userMessage.attachments ?? null,
+      userAttachments: sanitizeAttachmentsForStorage(userMessage.attachments),
       searchResults: assistantMessage.searchResults ?? null,
       userMessageId: userMessage.id,
       assistantMessageId: assistantMessage.id,
@@ -361,7 +393,7 @@ export async function saveChatExchange(
 
     if (!existingSession.exists()) {
       // Create the document with the first message pair
-      await setDoc(sessionRef, {
+      const sessionData: Record<string, unknown> = {
         userId,
         title: sessionId,
         model,
@@ -369,7 +401,10 @@ export async function saveChatExchange(
         isArchived: false,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-      });
+      };
+      if (userEmail) sessionData.userEmail = userEmail;
+
+      await setDoc(sessionRef, sessionData);
     } else {
       // Read existing messages, push new pair, write back
       // (arrayUnion is unreliable with complex objects containing Timestamps)

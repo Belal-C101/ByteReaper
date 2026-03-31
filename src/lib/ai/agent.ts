@@ -6,30 +6,66 @@ import { AI_MODELS, ModelKey, DEFAULT_MODEL } from './gemini';
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
-const SYSTEM_PROMPT = `You are ByteReaper, an expert AI developer assistant. You help developers with:
+// ─── Feature Flags ───────────────────────────────────────
 
-1. **Code Analysis**: Review code for bugs, security issues, performance problems, and best practices
-2. **Code Explanation**: Explain how code works in clear, simple terms
-3. **Code Generation**: Write clean, efficient code with proper error handling
-4. **Debugging Help**: Help identify and fix bugs in code
-5. **Architecture Advice**: Suggest better design patterns and architectures
-6. **Web Search**: Search the web for documentation, tutorials, and solutions
-7. **GitHub Analysis**: Analyze public GitHub repositories
+export interface ChatFeatures {
+  webSearch?: boolean;
+  thinking?: boolean;
+  studyMode?: boolean;
+}
 
-When analyzing code:
-- Be specific about line numbers and exact issues
-- Explain WHY something is a problem
-- Provide concrete fixes with code examples
-- Rate severity: critical, high, medium, low
+// ─── System Prompts ──────────────────────────────────────
 
-When searching the web:
-- Summarize key findings
-- Include relevant links
-- Focus on authoritative sources
+const SYSTEM_PROMPT = `You are ByteReaper, an expert AI developer assistant. You are highly intelligent, insightful, and thorough. You provide premium-quality responses that impress developers.
 
-Format your responses with markdown for better readability.
-Use code blocks with language identifiers for code snippets.
-Be concise but thorough.`;
+## Core Capabilities
+1. **Code Analysis**: Review code for bugs, security issues, performance problems, and best practices. Be extremely specific about issues and fixes.
+2. **Code Explanation**: Explain how code works in clear, layered terms — first a summary, then deeper details.
+3. **Code Generation**: Write clean, efficient, production-ready code with proper error handling, types, and documentation.
+4. **Debugging Help**: Systematically identify root causes (not just symptoms) and provide concrete fixes with code examples.
+5. **Architecture Advice**: Suggest proven design patterns, explain trade-offs, and provide migration paths.
+6. **Web Search Integration**: When search results are provided, synthesize key findings with source links. Focus on authoritative and recent sources.
+7. **File Analysis**: When files are attached, analyze them thoroughly — understand their purpose, identify issues, and provide actionable feedback.
+
+## Response Guidelines
+- Be **thorough but structured** — use headings, bullet points, and numbered lists.
+- Always explain **WHY** something is a problem or a good practice, not just what to do.
+- Provide **concrete code examples** for every suggestion.
+- Use **markdown formatting** with language-specific code blocks for readability.
+- Rate severity of issues: critical, high, medium, low.
+- When analyzing files, reference the **filename and relevant sections**.
+- For images: describe what you understand from the file metadata (name, type, size).
+- For HTML files: analyze structure, accessibility, SEO, and best practices.
+- For PDFs and documents: summarize content and extract key points.
+- Be concise on simple questions, thorough on complex ones. Match your response length to the question complexity.
+- Use analogies and examples to explain complex concepts when appropriate.`;
+
+const THINKING_PROMPT = `\n\nIMPORTANT: Before answering, think step-by-step internally. Break the problem into parts, consider edge cases, evaluate alternatives, then provide a comprehensive, well-reasoned answer. Show your reasoning chain where it helps the user understand.`;
+
+const STUDY_MODE_PROMPT = `You are ByteReaper in **Study & Learning Mode**. You are an exceptional tutor who makes complex topics accessible and memorable.
+
+## Study Mode Behavior
+1. **Summarization**: When given content (files, text, topics), create clear, structured summaries with key takeaways highlighted.
+2. **Quiz Generation**: Generate thoughtful quiz questions that test understanding at multiple levels:
+   - 🟢 Basic recall questions
+   - 🟡 Application questions (apply the concept)
+   - 🔴 Analysis questions (compare, evaluate, synthesize)
+   Format quizzes as:
+   **Q1 (🟢 Easy):** [question]
+   <details><summary>💡 Answer</summary>[detailed answer with explanation]</details>
+3. **Explain Like I'm 5 (ELI5)**: When asked, explain concepts using simple analogies and everyday language.
+4. **Socratic Method**: When helping with understanding, ask guiding questions that lead the learner to discover answers.
+5. **Flashcard Mode**: When requested, create key-value flashcard pairs for memorization.
+6. **Concept Maps**: Describe relationships between concepts in a structured, hierarchical way.
+
+## Study Response Format
+- Start with a brief **📋 Overview** of the topic.
+- Use **numbered sections** with clear headings.
+- Highlight **key terms** in bold.
+- End with **📝 Quick Check** — 2-3 questions to test understanding.
+- Use encouraging language — learning should feel rewarding.
+
+Always respond in an educational, structured, engaging way. Be thorough and smart, not superficial.`;
 
 export interface AgentResponse {
   content: string;
@@ -63,7 +99,7 @@ async function callOpenRouter(
       model: model.id,
       messages,
       temperature: 0.7,
-      max_tokens: 4096,
+      max_tokens: 8192,
       stream,
     }),
   });
@@ -80,20 +116,22 @@ export async function processAgentMessage(
   userMessage: string,
   attachments: FileAttachment[] = [],
   conversationHistory: ChatMessage[] = [],
-  modelKey: ModelKey = DEFAULT_MODEL
+  modelKey: ModelKey = DEFAULT_MODEL,
+  features: ChatFeatures = {}
 ): Promise<AgentResponse> {
   // Detect if user wants to search the web
-  const searchIntent = detectSearchIntent(userMessage);
+  const searchIntent = features.webSearch ? userMessage : detectSearchIntent(userMessage);
   let searchResults: SearchResult[] | undefined;
   let searchContext = '';
 
   if (searchIntent) {
-    const searchResponse = await searchWeb(searchIntent, 5);
+    const searchQuery = features.webSearch ? userMessage : searchIntent;
+    const searchResponse = await searchWeb(searchQuery, 5);
     if (searchResponse.results.length > 0) {
       searchResults = searchResponse.results;
-      searchContext = `\n\nWeb search results for "${searchIntent}":\n${
+      searchContext = `\n\nWeb search results for "${searchQuery}":\n${
         searchResults.map((r, i) => `${i + 1}. [${r.title}](${r.url})\n   ${r.snippet}`).join('\n\n')
-      }\n\nUse these search results to help answer the user's question.`;
+      }\n\nUse these search results to help answer the user's question. Cite sources where relevant.`;
     }
   }
 
@@ -103,19 +141,17 @@ export async function processAgentMessage(
     .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
     .join('\n\n');
 
-  // Build attachment context
-  let attachmentContext = '';
-  if (attachments.length > 0) {
-    attachmentContext = '\n\nAttached files:\n' + attachments.map(a => {
-      return `**${a.name}** (${a.type}):\n\`\`\`\n${a.content?.slice(0, 10000) || '[Binary file]'}\n\`\`\``;
-    }).join('\n\n');
-  }
+  // Build attachment context with improved formatting
+  const attachmentContext = buildAttachmentContext(attachments);
 
   const userContent = `Previous conversation:\n${historyContext || '(New conversation)'}\n${attachmentContext}\n${searchContext}\n\nUser: ${userMessage}`;
 
+  // Build system prompt based on features
+  const systemPrompt = buildSystemPrompt(features);
+
   try {
     const response = await callOpenRouter([
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: systemPrompt },
       { role: 'user', content: userContent },
     ], modelKey);
 
@@ -130,6 +166,73 @@ export async function processAgentMessage(
   } catch (error: any) {
     console.error('Agent error:', error);
     throw new Error(`Failed to process message: ${error.message}`);
+  }
+}
+
+function buildSystemPrompt(features: ChatFeatures): string {
+  if (features.studyMode) {
+    return STUDY_MODE_PROMPT + (features.thinking ? THINKING_PROMPT : '');
+  }
+  return SYSTEM_PROMPT + (features.thinking ? THINKING_PROMPT : '');
+}
+
+function buildAttachmentContext(attachments: FileAttachment[]): string {
+  if (attachments.length === 0) return '';
+
+  const parts = attachments.map(a => {
+    const fileExt = a.name.split('.').pop()?.toLowerCase() || '';
+    const isImage = a.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(fileExt);
+    const isHTML = fileExt === 'html' || fileExt === 'htm' || a.type === 'text/html';
+    const isPDF = fileExt === 'pdf' || a.type === 'application/pdf';
+    const isCode = ['js', 'ts', 'jsx', 'tsx', 'py', 'java', 'cpp', 'c', 'h', 'css', 'json', 'md', 'yaml', 'yml', 'sql', 'sh', 'bash', 'go', 'rs', 'rb', 'php'].includes(fileExt);
+
+    let contentBlock = '';
+    const sizeKB = Math.round(a.size / 1024);
+
+    if (isImage) {
+      // Free models can't see images — provide metadata
+      contentBlock = `[Image file: ${a.name}, Type: ${a.type}, Size: ${sizeKB}KB]\nNote: This is an image file. Describe what you can infer from the filename and context. If the user asks about its content, let them know you can analyze text/code files in detail but image vision requires a multimodal model.`;
+    } else if (isPDF) {
+      // Try to extract readable text from base64 PDF content
+      const textContent = a.content?.startsWith('data:') ? extractTextFromBase64(a.content) : (a.content || '');
+      contentBlock = `[PDF Document: ${a.name}, Size: ${sizeKB}KB]\nExtracted content:\n\`\`\`\n${textContent.slice(0, 15000) || '[Could not extract text — PDF may contain only images]'}\n\`\`\``;
+    } else if (isHTML) {
+      const htmlContent = a.content?.startsWith('data:') ? decodeBase64Content(a.content) : (a.content || '');
+      contentBlock = `[HTML File: ${a.name}, Size: ${sizeKB}KB]\nAnalyze this HTML for structure, accessibility, SEO, and best practices:\n\`\`\`html\n${htmlContent.slice(0, 15000)}\n\`\`\``;
+    } else if (isCode) {
+      contentBlock = `[Code File: ${a.name}, Size: ${sizeKB}KB]\n\`\`\`${fileExt}\n${a.content?.slice(0, 15000) || '[No content]'}\n\`\`\``;
+    } else {
+      // Generic text file
+      const textContent = a.content?.startsWith('data:') ? decodeBase64Content(a.content) : (a.content || '');
+      contentBlock = `**${a.name}** (${a.type}, ${sizeKB}KB):\n\`\`\`\n${textContent.slice(0, 15000) || '[Binary file — content not readable as text]'}\n\`\`\``;
+    }
+
+    return contentBlock;
+  });
+
+  return '\n\n📎 **Attached files:**\n' + parts.join('\n\n');
+}
+
+function decodeBase64Content(dataUrl: string): string {
+  try {
+    const base64Part = dataUrl.split(',')[1];
+    if (!base64Part) return '';
+    return Buffer.from(base64Part, 'base64').toString('utf-8');
+  } catch {
+    return '[Could not decode file content]';
+  }
+}
+
+function extractTextFromBase64(dataUrl: string): string {
+  try {
+    const base64Part = dataUrl.split(',')[1];
+    if (!base64Part) return '';
+    const decoded = Buffer.from(base64Part, 'base64').toString('utf-8');
+    // Basic text extraction from PDF — extract readable strings
+    const textParts = decoded.match(/[\x20-\x7E\n\r\t]{4,}/g);
+    return textParts ? textParts.join(' ').slice(0, 15000) : '';
+  } catch {
+    return '';
   }
 }
 
@@ -169,7 +272,8 @@ export async function* streamAgentMessage(
   userMessage: string,
   attachments: FileAttachment[] = [],
   conversationHistory: ChatMessage[] = [],
-  modelKey: ModelKey = DEFAULT_MODEL
+  modelKey: ModelKey = DEFAULT_MODEL,
+  features: ChatFeatures = {}
 ): AsyncGenerator<string, void, unknown> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
@@ -185,20 +289,35 @@ export async function* streamAgentMessage(
 
   console.log(`[ByteReaper] Using model: ${model.id}`);
 
+  // ── Search (if web search enabled or intent detected) ──
+  let searchContext = '';
+  const searchIntent = features.webSearch ? userMessage : detectSearchIntent(userMessage);
+  if (searchIntent) {
+    try {
+      const searchQuery = features.webSearch ? userMessage : searchIntent;
+      const searchResponse = await searchWeb(searchQuery, 5);
+      if (searchResponse.results.length > 0) {
+        searchContext = `\n\nWeb search results for "${searchQuery}":\n${
+          searchResponse.results.map((r, i) => `${i + 1}. [${r.title}](${r.url})\n   ${r.snippet}`).join('\n\n')
+        }\n\nUse these search results to help answer the user's question. Cite sources where relevant.`;
+      }
+    } catch (searchError) {
+      console.error('[ByteReaper] Search error:', searchError);
+    }
+  }
+
   // Build context
   const historyContext = conversationHistory
     .slice(-10)
     .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
     .join('\n\n');
 
-  let attachmentContext = '';
-  if (attachments.length > 0) {
-    attachmentContext = '\n\nAttached files:\n' + attachments.map(a => {
-      return `**${a.name}** (${a.type}):\n\`\`\`\n${a.content?.slice(0, 10000) || '[Binary file]'}\n\`\`\``;
-    }).join('\n\n');
-  }
+  const attachmentContext = buildAttachmentContext(attachments);
 
-  const userContent = `Previous conversation:\n${historyContext || '(New conversation)'}\n${attachmentContext}\n\nUser: ${userMessage}`;
+  const userContent = `Previous conversation:\n${historyContext || '(New conversation)'}\n${attachmentContext}\n${searchContext}\n\nUser: ${userMessage}`;
+
+  // Build system prompt based on features
+  const systemPrompt = buildSystemPrompt(features);
 
   try {
     const response = await fetch(OPENROUTER_API_URL, {
@@ -212,11 +331,11 @@ export async function* streamAgentMessage(
       body: JSON.stringify({
         model: model.id,
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'system', content: systemPrompt },
           { role: 'user', content: userContent },
         ],
-        temperature: 0.7,
-        max_tokens: 4096,
+        temperature: features.studyMode ? 0.5 : 0.7,
+        max_tokens: 8192,
         stream: true,
       }),
     });

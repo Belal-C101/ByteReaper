@@ -614,8 +614,6 @@ export function ChatInterface() {
         try {
           await currentUser.getIdToken(true);
           targetSessionId = await createChatSession(currentUser.uid, sessionTitle || "New Chat", model);
-          setDraftSession(null);
-          setSessionId(targetSessionId);
         } catch (sessionError) {
           console.error("Background session creation failed:", sessionError);
           return; // Silently fail — user already has their AI response
@@ -623,7 +621,17 @@ export function ChatInterface() {
       }
 
       if (targetSessionId && !targetSessionId.startsWith(DRAFT_CHAT_ID_PREFIX)) {
+        // IMPORTANT: Save exchange BEFORE changing sessionId.
+        // Changing sessionId triggers a useEffect that re-fetches messages from Firestore.
+        // If we set sessionId first, the useEffect reads empty data and wipes local messages.
         await saveChatExchange(targetSessionId, currentUser.uid, userMsg, assistantMsg, model);
+
+        // NOW safe to update the session ID — messages are already in Firestore
+        if (needsNewSession) {
+          setDraftSession(null);
+          setSessions((prev) => prev.filter((s) => !s.isDraft));
+          setSessionId(targetSessionId);
+        }
         await loadSessions(targetSessionId);
       }
     } catch (persistError) {
@@ -694,7 +702,7 @@ export function ChatInterface() {
                       return (
                         <button
                           key={session.id}
-                          onClick={() => { setChatError(null); setSessionId(session.id); }}
+                          onClick={() => { setChatError(null); if (draftSession && session.id !== draftSession.id) { setDraftSession(null); setSessions((prev) => prev.filter((s) => !s.isDraft)); } setSessionId(session.id); }}
                           className={cn(
                             "group w-full text-left px-3 py-2.5 mx-1.5 rounded-lg transition-all duration-150",
                             "hover:bg-accent/50",
@@ -784,7 +792,7 @@ export function ChatInterface() {
                         archivedSessions.map((session) => (
                           <button
                             key={session.id}
-                            onClick={() => { setChatError(null); setSessionId(session.id); }}
+                            onClick={() => { setChatError(null); if (draftSession) { setDraftSession(null); setSessions((prev) => prev.filter((s) => !s.isDraft)); } setSessionId(session.id); }}
                             className={cn(
                               "group w-full text-left px-2 py-2 rounded-lg transition-colors",
                               "hover:bg-accent/40",

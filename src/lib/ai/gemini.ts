@@ -10,52 +10,53 @@ const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 // All models have pricing: {"prompt":"0","completion":"0"}
 export const AI_MODELS = {
   'auto': {
-    id: 'openrouter/free',
-    name: 'Auto (Free Router)',
+    id: 'openrouter/auto',
+    name: 'Auto (Best Available)',
     description: '🎲 Auto-select',
     provider: 'OpenRouter',
+    supportsVision: true,
   },
   'gemini-flash': {
-    id: 'google/gemini-2.0-flash-lite-preview-02-05:free',
-    name: 'Gemini 2.0 Flash',
+    id: 'google/gemini-2.5-flash-preview:free',
+    name: 'Gemini 2.5 Flash',
     description: '👁️ Vision + Fast',
     provider: 'Google',
+    supportsVision: true,
+  },
+  'gemini-flash-lite': {
+    id: 'google/gemini-2.5-flash-lite-preview:free',
+    name: 'Gemini 2.5 Flash Lite',
+    description: '⚡ Fast + Vision',
+    provider: 'Google',
+    supportsVision: true,
   },
   'nemotron': {
     id: 'nvidia/nemotron-3-super-120b-a12b:free',
     name: 'Nemotron 3 Super 120B',
     description: '🚀 Powerful',
     provider: 'NVIDIA',
+    supportsVision: false,
+  },
+  'qwen-plus': {
+    id: 'qwen/qwen3.6-plus-preview:free',
+    name: 'Qwen 3.6 Plus',
+    description: '🧠 Reasoning',
+    provider: 'Qwen',
+    supportsVision: false,
   },
   'minimax': {
     id: 'minimax/minimax-m2.5:free',
     name: 'MiniMax M2.5',
     description: '⚡ Fast',
     provider: 'MiniMax',
-  },
-  'step-flash': {
-    id: 'stepfun/step-3.5-flash:free',
-    name: 'Step 3.5 Flash',
-    description: '🧠 Reasoning',
-    provider: 'StepFun',
-  },
-  'trinity': {
-    id: 'arcee-ai/trinity-large-preview:free',
-    name: 'Trinity Large 400B',
-    description: '✨ Creative',
-    provider: 'Arcee AI',
-  },
-  'liquid-think': {
-    id: 'liquid/lfm-2.5-1.2b-thinking:free',
-    name: 'LFM 2.5 Thinking',
-    description: '💭 Thinking',
-    provider: 'LiquidAI',
+    supportsVision: false,
   },
   'liquid': {
     id: 'liquid/lfm-2.5-1.2b-instruct:free',
     name: 'LFM 2.5 Instruct',
     description: '📝 Instruct',
     provider: 'LiquidAI',
+    supportsVision: false,
   },
 } as const;
 

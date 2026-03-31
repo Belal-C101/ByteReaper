@@ -151,12 +151,12 @@ function readFileAsDataUrl(file: File): Promise<string> {
 }
 
 const AI_MODELS = {
-  auto: { name: "Auto (Free Router)", description: "🎲 Auto-select", provider: "OpenRouter" },
+  auto: { name: "Auto (Best Available)", description: "🎲 Auto-select", provider: "OpenRouter" },
+  "gemini-flash": { name: "Gemini 2.5 Flash", description: "👁️ Vision + Fast", provider: "Google" },
+  "gemini-flash-lite": { name: "Gemini 2.5 Flash Lite", description: "⚡ Fast + Vision", provider: "Google" },
   nemotron: { name: "Nemotron 3 Super 120B", description: "🚀 Powerful", provider: "NVIDIA" },
+  "qwen-plus": { name: "Qwen 3.6 Plus", description: "🧠 Reasoning", provider: "Qwen" },
   minimax: { name: "MiniMax M2.5", description: "⚡ Fast", provider: "MiniMax" },
-  "step-flash": { name: "Step 3.5 Flash", description: "🧠 Reasoning", provider: "StepFun" },
-  trinity: { name: "Trinity Large 400B", description: "✨ Creative", provider: "Arcee AI" },
-  "liquid-think": { name: "LFM 2.5 Thinking", description: "💭 Thinking", provider: "LiquidAI" },
   liquid: { name: "LFM 2.5 Instruct", description: "📝 Instruct", provider: "LiquidAI" },
 } as const;
 

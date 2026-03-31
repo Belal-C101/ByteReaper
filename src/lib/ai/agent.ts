@@ -1,5 +1,6 @@
 import 'server-only';
 
+import mammoth from 'mammoth';
 import { searchWeb } from '@/lib/search/duckduckgo';
 import { ChatMessage, FileAttachment, SearchResult } from '@/types/chat';
 import { AI_MODELS, ModelKey, DEFAULT_MODEL } from './gemini';
@@ -34,9 +35,11 @@ const SYSTEM_PROMPT = `You are ByteReaper, an expert AI developer assistant. You
 - Use **markdown formatting** with language-specific code blocks for readability.
 - Rate severity of issues: critical, high, medium, low.
 - When analyzing files, reference the **filename and relevant sections**.
-- For images: describe what you understand from the file metadata (name, type, size).
+- For images: describe what you see in the image and analyze its contents visually.
+- For Word documents (DOCX/DOC): read and analyze the extracted text content provided.
 - For HTML files: analyze structure, accessibility, SEO, and best practices.
-- For PDFs and documents: summarize content and extract key points.
+- For PDFs and documents: summarize content and extract key points from the provided text.
+- **IMPORTANT**: Always analyze the ACTUAL content provided in the file attachments. Do NOT make assumptions or search the web for information unless the user explicitly asks.
 - Be concise on simple questions, thorough on complex ones. Match your response length to the question complexity.
 - Use analogies and examples to explain complex concepts when appropriate.`;
 
@@ -141,8 +144,8 @@ export async function processAgentMessage(
     .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
     .join('\n\n');
 
-  // Build attachment context with improved formatting
-  const attachmentContext = buildAttachmentContext(attachments);
+  // Build attachment context with proper async document parsing
+  const attachmentContext = await buildAttachmentContextAsync(attachments);
 
   const userContentString = `Previous conversation:\n${historyContext || '(New conversation)'}\n${attachmentContext}\n${searchContext}\n\nUser: ${userMessage}`;
 
@@ -170,10 +173,13 @@ export async function processAgentMessage(
   // Build system prompt based on features
   const systemPrompt = buildSystemPrompt(features);
 
-  // If using an image, we MUST use a vision model in callOpenRouter
+  // If using an image, we MUST use a vision-capable model
   let activeModelKey = modelKey;
-  if (hasImages && activeModelKey !== 'gemini-flash') {
+  const selectedModel = AI_MODELS[modelKey];
+  if (hasImages && !selectedModel?.supportsVision) {
+    // Switch to a vision-capable model
     activeModelKey = 'gemini-flash';
+    console.log(`[ByteReaper] Vision required: Switching from ${modelKey} to ${activeModelKey}`);
   }
 
   try {
@@ -203,6 +209,55 @@ function buildSystemPrompt(features: ChatFeatures): string {
   return SYSTEM_PROMPT + (features.thinking ? THINKING_PROMPT : '');
 }
 
+// Async function to build attachment context with proper document parsing
+async function buildAttachmentContextAsync(attachments: FileAttachment[]): Promise<string> {
+  if (attachments.length === 0) return '';
+
+  const parts = await Promise.all(attachments.map(async (a) => {
+    const fileExt = a.name.split('.').pop()?.toLowerCase() || '';
+    const isImage = a.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(fileExt);
+    const isHTML = fileExt === 'html' || fileExt === 'htm' || a.type === 'text/html';
+    const isPDF = fileExt === 'pdf' || a.type === 'application/pdf';
+    const isDocx = fileExt === 'docx' || a.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    const isDoc = fileExt === 'doc' || a.type === 'application/msword';
+    const isCode = ['js', 'ts', 'jsx', 'tsx', 'py', 'java', 'cpp', 'c', 'h', 'css', 'json', 'md', 'yaml', 'yml', 'sql', 'sh', 'bash', 'go', 'rs', 'rb', 'php'].includes(fileExt);
+
+    let contentBlock = '';
+    const sizeKB = Math.round(a.size / 1024);
+
+    if (isImage) {
+      // For multimodal models, the actual image is attached separately.
+      contentBlock = `[Image file attached: ${a.name}, Type: ${a.type}, Size: ${sizeKB}KB]\nPlease analyze this image visually.`;
+    } else if (isDocx) {
+      // Extract text from DOCX using mammoth
+      const textContent = await extractDocxText(a.content || '');
+      contentBlock = `[Word Document: ${a.name}, Size: ${sizeKB}KB]\nDocument content:\n\`\`\`\n${textContent.slice(0, 15000) || '[Could not extract text from document]'}\n\`\`\``;
+    } else if (isDoc) {
+      // Old DOC format - try basic extraction
+      const textContent = a.content?.startsWith('data:') ? extractTextFromBinary(a.content) : (a.content || '');
+      contentBlock = `[Word Document (Legacy): ${a.name}, Size: ${sizeKB}KB]\nExtracted content:\n\`\`\`\n${textContent.slice(0, 15000) || '[Legacy DOC format - limited text extraction]'}\n\`\`\``;
+    } else if (isPDF) {
+      const textContent = a.content?.startsWith('data:') ? extractTextFromBase64(a.content) : (a.content || '');
+      contentBlock = `[PDF Document: ${a.name}, Size: ${sizeKB}KB]\nExtracted content:\n\`\`\`\n${textContent.slice(0, 15000) || '[Could not extract text — PDF may contain only images]'}\n\`\`\``;
+    } else if (isHTML) {
+      const htmlContent = a.content?.startsWith('data:') ? decodeBase64Content(a.content) : (a.content || '');
+      contentBlock = `[HTML File: ${a.name}, Size: ${sizeKB}KB]\nAnalyze this HTML for structure, accessibility, SEO, and best practices:\n\`\`\`html\n${htmlContent.slice(0, 15000)}\n\`\`\``;
+    } else if (isCode) {
+      const codeContent = a.content?.startsWith('data:') ? decodeBase64Content(a.content) : (a.content || '');
+      contentBlock = `[Code File: ${a.name}, Size: ${sizeKB}KB]\n\`\`\`${fileExt}\n${codeContent.slice(0, 15000) || '[No content]'}\n\`\`\``;
+    } else {
+      // Generic text file
+      const textContent = a.content?.startsWith('data:') ? decodeBase64Content(a.content) : (a.content || '');
+      contentBlock = `**${a.name}** (${a.type}, ${sizeKB}KB):\n\`\`\`\n${textContent.slice(0, 15000) || '[Binary file — content not readable as text]'}\n\`\`\``;
+    }
+
+    return contentBlock;
+  }));
+
+  return '\n\n📎 **Attached files:**\n' + parts.join('\n\n');
+}
+
+// Synchronous version for backward compatibility (for non-async contexts)
 function buildAttachmentContext(attachments: FileAttachment[]): string {
   if (attachments.length === 0) return '';
 
@@ -211,26 +266,29 @@ function buildAttachmentContext(attachments: FileAttachment[]): string {
     const isImage = a.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(fileExt);
     const isHTML = fileExt === 'html' || fileExt === 'htm' || a.type === 'text/html';
     const isPDF = fileExt === 'pdf' || a.type === 'application/pdf';
+    const isDocx = fileExt === 'docx' || a.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    const isDoc = fileExt === 'doc' || a.type === 'application/msword';
     const isCode = ['js', 'ts', 'jsx', 'tsx', 'py', 'java', 'cpp', 'c', 'h', 'css', 'json', 'md', 'yaml', 'yml', 'sql', 'sh', 'bash', 'go', 'rs', 'rb', 'php'].includes(fileExt);
 
     let contentBlock = '';
     const sizeKB = Math.round(a.size / 1024);
 
     if (isImage) {
-      // For multimodal models, the actual image is attached separately.
-      // We still provide metadata here.
-      contentBlock = `[Image file attached: ${a.name}, Type: ${a.type}, Size: ${sizeKB}KB]`;
+      contentBlock = `[Image file attached: ${a.name}, Type: ${a.type}, Size: ${sizeKB}KB]\nPlease analyze this image visually.`;
+    } else if (isDocx || isDoc) {
+      // For sync context, we'll use the pre-extracted content if available
+      const textContent = a.content?.startsWith('data:') ? extractDocxTextSync(a.content) : (a.content || '');
+      contentBlock = `[Word Document: ${a.name}, Size: ${sizeKB}KB]\nDocument content:\n\`\`\`\n${textContent.slice(0, 15000) || '[Document content - use async method for full extraction]'}\n\`\`\``;
     } else if (isPDF) {
-      // Try to extract readable text from base64 PDF content
       const textContent = a.content?.startsWith('data:') ? extractTextFromBase64(a.content) : (a.content || '');
       contentBlock = `[PDF Document: ${a.name}, Size: ${sizeKB}KB]\nExtracted content:\n\`\`\`\n${textContent.slice(0, 15000) || '[Could not extract text — PDF may contain only images]'}\n\`\`\``;
     } else if (isHTML) {
       const htmlContent = a.content?.startsWith('data:') ? decodeBase64Content(a.content) : (a.content || '');
       contentBlock = `[HTML File: ${a.name}, Size: ${sizeKB}KB]\nAnalyze this HTML for structure, accessibility, SEO, and best practices:\n\`\`\`html\n${htmlContent.slice(0, 15000)}\n\`\`\``;
     } else if (isCode) {
-      contentBlock = `[Code File: ${a.name}, Size: ${sizeKB}KB]\n\`\`\`${fileExt}\n${a.content?.slice(0, 15000) || '[No content]'}\n\`\`\``;
+      const codeContent = a.content?.startsWith('data:') ? decodeBase64Content(a.content) : (a.content || '');
+      contentBlock = `[Code File: ${a.name}, Size: ${sizeKB}KB]\n\`\`\`${fileExt}\n${codeContent.slice(0, 15000) || '[No content]'}\n\`\`\``;
     } else {
-      // Generic text file
       const textContent = a.content?.startsWith('data:') ? decodeBase64Content(a.content) : (a.content || '');
       contentBlock = `**${a.name}** (${a.type}, ${sizeKB}KB):\n\`\`\`\n${textContent.slice(0, 15000) || '[Binary file — content not readable as text]'}\n\`\`\``;
     }
@@ -239,6 +297,71 @@ function buildAttachmentContext(attachments: FileAttachment[]): string {
   });
 
   return '\n\n📎 **Attached files:**\n' + parts.join('\n\n');
+}
+
+// Extract text from DOCX file using mammoth
+async function extractDocxText(dataUrl: string): Promise<string> {
+  try {
+    if (!dataUrl || !dataUrl.startsWith('data:')) {
+      return dataUrl || '';
+    }
+    
+    const base64Part = dataUrl.split(',')[1];
+    if (!base64Part) return '';
+    
+    const buffer = Buffer.from(base64Part, 'base64');
+    const result = await mammoth.extractRawText({ buffer });
+    
+    return result.value.trim() || '[Document appears to be empty]';
+  } catch (error) {
+    console.error('DOCX extraction error:', error);
+    return '[Could not extract text from DOCX file]';
+  }
+}
+
+// Synchronous DOCX text extraction (limited - extracts XML text content)
+function extractDocxTextSync(dataUrl: string): string {
+  try {
+    if (!dataUrl || !dataUrl.startsWith('data:')) {
+      return dataUrl || '';
+    }
+    
+    const base64Part = dataUrl.split(',')[1];
+    if (!base64Part) return '';
+    
+    const decoded = Buffer.from(base64Part, 'base64').toString('utf-8');
+    
+    // DOCX is a ZIP file with XML inside - try to find text content
+    // Look for <w:t> tags which contain text in Word documents
+    const textMatches = decoded.match(/<w:t[^>]*>([^<]*)<\/w:t>/g);
+    if (textMatches) {
+      const text = textMatches
+        .map(match => match.replace(/<[^>]+>/g, ''))
+        .join(' ')
+        .trim();
+      return text || '[Document appears to be empty]';
+    }
+    
+    // Fallback: extract any readable ASCII strings
+    const textParts = decoded.match(/[\x20-\x7E]{4,}/g);
+    return textParts ? textParts.filter(p => !p.includes('xml') && !p.includes('Content')).join(' ').slice(0, 15000) : '';
+  } catch {
+    return '[Could not extract text from document]';
+  }
+}
+
+// Extract text from binary files
+function extractTextFromBinary(dataUrl: string): string {
+  try {
+    const base64Part = dataUrl.split(',')[1];
+    if (!base64Part) return '';
+    const decoded = Buffer.from(base64Part, 'base64').toString('utf-8');
+    // Extract readable ASCII strings
+    const textParts = decoded.match(/[\x20-\x7E]{4,}/g);
+    return textParts ? textParts.join(' ').slice(0, 15000) : '';
+  } catch {
+    return '';
+  }
 }
 
 function decodeBase64Content(dataUrl: string): string {
@@ -322,10 +445,15 @@ export async function* streamAgentMessage(
     return a.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
   });
 
+  // Determine the correct model to use
   let activeModelId = model.id;
-  if (hasImages && modelKey !== 'gemini-flash' && !model.id.includes('auto') && !model.id.includes('claude') && !model.id.includes('openai') && !model.id.includes('gemini')) {
+  let activeModelKey = modelKey;
+  
+  // If using images and current model doesn't support vision, switch to gemini-flash
+  if (hasImages && !model.supportsVision) {
+    activeModelKey = 'gemini-flash';
     activeModelId = AI_MODELS['gemini-flash'].id;
-    console.log(`[ByteReaper] Vision required: Auto-switched to multimodal model (${activeModelId})`);
+    console.log(`[ByteReaper] Vision required: Switching to ${activeModelId}`);
   }
 
   // ── Search (if web search enabled or intent detected) ──
@@ -351,7 +479,8 @@ export async function* streamAgentMessage(
     .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
     .join('\n\n');
 
-  const attachmentContext = buildAttachmentContext(attachments);
+  // Use async document parsing for proper DOCX support
+  const attachmentContext = await buildAttachmentContextAsync(attachments);
 
   const userContentString = `Previous conversation:\n${historyContext || '(New conversation)'}\n${attachmentContext}\n${searchContext}\n\nUser: ${userMessage}`;
 
@@ -375,92 +504,125 @@ export async function* streamAgentMessage(
   // Build system prompt based on features
   const systemPrompt = buildSystemPrompt(features);
 
-  try {
-    const response = await fetch(OPENROUTER_API_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000',
-        'X-Title': 'ByteReaper',
-      },
-      body: JSON.stringify({
-        model: activeModelId,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: finalUserContent },
-        ],
-        temperature: features.studyMode ? 0.5 : 0.7,
-        max_tokens: 8192,
-        stream: true,
-      }),
-    });
+  // List of fallback models for vision tasks
+  const visionFallbacks = ['gemini-flash', 'gemini-flash-lite', 'auto'];
+  let currentModelId = activeModelId;
+  let attemptCount = 0;
+  const maxAttempts = hasImages ? visionFallbacks.length : 1;
 
-    if (!response.ok) {
-      const errorBody = await response.text();
-      console.error(`[ByteReaper] API Error ${response.status}:`, errorBody);
-      yield `Error: API returned ${response.status}. ${errorBody.includes('model') ? 'Model may not be available.' : 'Please try again.'}`;
-      return;
-    }
+  while (attemptCount < maxAttempts) {
+    try {
+      const response = await fetch(OPENROUTER_API_URL, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000',
+          'X-Title': 'ByteReaper',
+        },
+        body: JSON.stringify({
+          model: currentModelId,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: finalUserContent },
+          ],
+          temperature: features.studyMode ? 0.5 : 0.7,
+          max_tokens: 8192,
+          stream: true,
+        }),
+      });
 
-    let resolvedModelId =
-      response.headers.get('x-openrouter-model') ||
-      response.headers.get('x-model') ||
-      model.id;
+      if (!response.ok) {
+        const errorBody = await response.text();
+        console.error(`[ByteReaper] API Error ${response.status} with model ${currentModelId}:`, errorBody);
+        
+        // Try fallback model for vision tasks
+        if (hasImages && attemptCount < maxAttempts - 1) {
+          attemptCount++;
+          const fallbackKey = visionFallbacks[attemptCount] as ModelKey;
+          currentModelId = AI_MODELS[fallbackKey]?.id || currentModelId;
+          console.log(`[ByteReaper] Retrying with fallback model: ${currentModelId}`);
+          continue;
+        }
+        
+        yield `Error: API returned ${response.status}. ${errorBody.includes('model') ? 'Model may not be available. Try selecting a different model.' : 'Please try again.'}`;
+        return;
+      }
 
-    yield `${STREAM_MODEL_META_PREFIX}${resolvedModelId}`;
+      let resolvedModelId =
+        response.headers.get('x-openrouter-model') ||
+        response.headers.get('x-model') ||
+        currentModelId;
 
-    const reader = response.body?.getReader();
-    const decoder = new TextDecoder();
+      yield `${STREAM_MODEL_META_PREFIX}${resolvedModelId}`;
 
-    if (!reader) {
-      yield "Error: No response body received from API.";
-      return;
-    }
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
 
-    let hasContent = false;
+      if (!reader) {
+        yield "Error: No response body received from API.";
+        return;
+      }
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+      let hasContent = false;
 
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n');
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6);
-          if (data === '[DONE]') continue;
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
 
-          try {
-            const parsed = JSON.parse(data);
-            if (typeof parsed.model === 'string' && parsed.model.trim() && parsed.model !== resolvedModelId) {
-              resolvedModelId = parsed.model;
-              yield `${STREAM_MODEL_META_PREFIX}${resolvedModelId}`;
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            if (data === '[DONE]') continue;
+
+            try {
+              const parsed = JSON.parse(data);
+              if (typeof parsed.model === 'string' && parsed.model.trim() && parsed.model !== resolvedModelId) {
+                resolvedModelId = parsed.model;
+                yield `${STREAM_MODEL_META_PREFIX}${resolvedModelId}`;
+              }
+
+              const content = parsed.choices?.[0]?.delta?.content;
+              if (content) {
+                hasContent = true;
+                yield content;
+              }
+              // Check for errors in the response
+              if (parsed.error) {
+                console.error('[ByteReaper] Stream error:', parsed.error);
+                yield `\n\nError: ${parsed.error.message || 'Unknown error'}`;
+              }
+            } catch {
+              // Skip parse errors for incomplete JSON chunks
             }
-
-            const content = parsed.choices?.[0]?.delta?.content;
-            if (content) {
-              hasContent = true;
-              yield content;
-            }
-            // Check for errors in the response
-            if (parsed.error) {
-              console.error('[ByteReaper] Stream error:', parsed.error);
-              yield `\n\nError: ${parsed.error.message || 'Unknown error'}`;
-            }
-          } catch {
-            // Skip parse errors for incomplete JSON chunks
           }
         }
       }
-    }
 
-    if (!hasContent) {
-      yield "I apologize, but I couldn't generate a response. Please try again or select a different model.";
+      if (!hasContent) {
+        yield "I apologize, but I couldn't generate a response. Please try again or select a different model.";
+      }
+      
+      // Success - exit the retry loop
+      return;
+      
+    } catch (error: any) {
+      console.error('[ByteReaper] Stream error:', error);
+      
+      // Try fallback model for vision tasks
+      if (hasImages && attemptCount < maxAttempts - 1) {
+        attemptCount++;
+        const fallbackKey = visionFallbacks[attemptCount] as ModelKey;
+        currentModelId = AI_MODELS[fallbackKey]?.id || currentModelId;
+        console.log(`[ByteReaper] Retrying after error with fallback model: ${currentModelId}`);
+        continue;
+      }
+      
+      yield `Error: ${error.message || 'Failed to connect to AI service'}`;
+      return;
     }
-  } catch (error: any) {
-    console.error('[ByteReaper] Stream error:', error);
-    yield `Error: ${error.message || 'Failed to connect to AI service'}`;
   }
 }

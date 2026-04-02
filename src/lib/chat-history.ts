@@ -28,12 +28,20 @@ export interface StoredAttachment {
   size: number;
 }
 
+export interface StoredMediaLink {
+  url: string;
+  name: string;
+  provider?: string;
+}
+
 export interface MessagePair {
   userMessage: string;
   response: string;
   model: string;
   timestamp: Timestamp | Date | string;
   userAttachments?: StoredAttachment[] | null;
+  imageLinks?: StoredMediaLink[] | null;
+  fileLinks?: StoredMediaLink[] | null;
   searchResults?: ChatMessage['searchResults'] | null;
   userMessageId: string;
   assistantMessageId: string;
@@ -293,6 +301,8 @@ export async function getSessionMessages(sessionId: string, userId?: string): Pr
             content: pair.userMessage,
             timestamp,
             attachments: pair.userAttachments ?? undefined,
+            imageLinks: pair.imageLinks ?? undefined,
+            fileLinks: pair.fileLinks ?? undefined,
             isStreaming: false,
           });
         }
@@ -332,6 +342,8 @@ export async function getSessionMessages(sessionId: string, userId?: string): Pr
             content: pair.userMessage,
             timestamp,
             attachments: pair.userAttachments ?? undefined,
+            imageLinks: pair.imageLinks ?? undefined,
+            fileLinks: pair.fileLinks ?? undefined,
             isStreaming: false,
           });
         }
@@ -379,12 +391,24 @@ export async function saveChatExchange(
 
     // CRITICAL: Strip binary content from attachments to stay under Firestore 1 MB limit.
     // Only store metadata (id, name, type, size) — not the base64 data URLs.
+    // Build image/file link arrays from uploaded attachments
+    const imageLinks: StoredMediaLink[] = [];
+    const fileLinks: StoredMediaLink[] = [];
+    if (userMessage.imageLinks && userMessage.imageLinks.length > 0) {
+      userMessage.imageLinks.forEach((link) => imageLinks.push({ url: link.url, name: link.name, provider: link.provider }));
+    }
+    if (userMessage.fileLinks && userMessage.fileLinks.length > 0) {
+      userMessage.fileLinks.forEach((link) => fileLinks.push({ url: link.url, name: link.name, provider: link.provider }));
+    }
+
     const messagePair: MessagePair = {
       userMessage: userMessage.content,
       response: assistantMessage.content,
       model,
       timestamp: Timestamp.fromDate(exchangeTimestamp),
       userAttachments: sanitizeAttachmentsForStorage(userMessage.attachments),
+      imageLinks: imageLinks.length > 0 ? imageLinks : null,
+      fileLinks: fileLinks.length > 0 ? fileLinks : null,
       searchResults: assistantMessage.searchResults ?? null,
       userMessageId: userMessage.id,
       assistantMessageId: assistantMessage.id,

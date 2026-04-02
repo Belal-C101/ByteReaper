@@ -4,6 +4,8 @@ export interface ChatMessage {
   content: string;
   timestamp: Date;
   attachments?: FileAttachment[];
+  imageLinks?: UploadedMediaLink[];
+  fileLinks?: UploadedMediaLink[];
   searchResults?: SearchResult[];
   isStreaming?: boolean;
   error?: string;
@@ -16,6 +18,13 @@ export interface FileAttachment {
   size: number;
   content?: string;
   preview?: string;
+  cloudinaryUrl?: string;
+}
+
+export interface UploadedMediaLink {
+  url: string;
+  name: string;
+  provider?: string;
 }
 
 export interface SearchResult {

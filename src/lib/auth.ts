@@ -4,6 +4,7 @@ import {
   signInWithEmailAndPassword,
   signInWithPopup,
   signOut as firebaseSignOut,
+  updateProfile,
   User
 } from 'firebase/auth';
 import { doc, setDoc, getDoc, Timestamp } from 'firebase/firestore';
@@ -19,7 +20,7 @@ function getUserProfileDocId(user: User): string {
   return email;
 }
 
-async function syncUserProfile(user: User, displayNameOverride?: string) {
+async function syncUserProfile(user: User, displayNameOverride?: string, username?: string) {
   const userEmail = user.email?.trim();
   if (!userEmail) {
     throw new Error('Authenticated user does not have an email address.');
@@ -36,6 +37,7 @@ async function syncUserProfile(user: User, displayNameOverride?: string) {
       email: userEmail,
       emailDocId: userDocId,
       displayName: displayNameOverride ?? user.displayName,
+      username: username ?? null,
       photoURL: user.photoURL ?? null,
       createdAt: now,
       lastLogin: now,
@@ -58,14 +60,19 @@ async function syncUserProfile(user: User, displayNameOverride?: string) {
 }
 
 // Sign up with email and password
-export async function signUpWithEmail(email: string, password: string, displayName: string) {
+export async function signUpWithEmail(email: string, password: string, displayName: string, username?: string) {
   try {
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
     const user = userCredential.user;
 
+    // Set Firebase Auth display name
+    if (displayName) {
+      await updateProfile(user, { displayName });
+    }
+
     // Sync user profile without blocking successful auth
     try {
-      await syncUserProfile(user, displayName);
+      await syncUserProfile(user, displayName, username || undefined);
     } catch (profileError) {
       console.error('Failed to sync user profile after sign up:', profileError);
     }
@@ -125,4 +132,35 @@ export async function signOut() {
 // Get current user
 export function getCurrentUser(): User | null {
   return auth.currentUser;
+}
+
+// Update user profile (display name and username)
+export async function updateUserProfile(
+  user: User,
+  newDisplayName?: string,
+  newUsername?: string
+) {
+  const userEmail = user.email?.trim();
+  if (!userEmail) {
+    throw new Error('User does not have an email address.');
+  }
+
+  // Update Firebase Auth display name
+  if (newDisplayName !== undefined) {
+    await updateProfile(user, { displayName: newDisplayName || null });
+  }
+
+  // Update Firestore user document
+  const userRef = doc(db, 'users', userEmail);
+  const updateData: Record<string, any> = {};
+  if (newDisplayName !== undefined) {
+    updateData.displayName = newDisplayName || null;
+  }
+  if (newUsername !== undefined) {
+    updateData.username = newUsername || null;
+  }
+
+  if (Object.keys(updateData).length > 0) {
+    await setDoc(userRef, updateData, { merge: true });
+  }
 }

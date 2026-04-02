@@ -13,6 +13,9 @@ export interface ChatFeatures {
   webSearch?: boolean;
   thinking?: boolean;
   studyMode?: boolean;
+  summarize?: boolean;
+  translate?: string; // target language, e.g. 'Arabic', 'Spanish'
+  codeReview?: boolean;
 }
 
 // ─── System Prompts ──────────────────────────────────────
@@ -69,6 +72,25 @@ const STUDY_MODE_PROMPT = `You are ByteReaper in **Study & Learning Mode**. You 
 - Use encouraging language — learning should feel rewarding.
 
 Always respond in an educational, structured, engaging way. Be thorough and smart, not superficial.`;
+
+const SUMMARIZE_PROMPT = `\n\nIMPORTANT: You are in **Summarize Mode**. For every response:
+- Provide a **TL;DR** (1-2 sentences) at the top
+- Follow with **Key Points** as a bulleted list
+- Keep language concise and scannable
+- Highlight the most important information in **bold**
+- If code is involved, show only the most critical snippets
+- End with a brief **Bottom Line** statement`;
+
+const TRANSLATE_PROMPT_PREFIX = `\n\nIMPORTANT: You are in **Translate Mode**. Translate your ENTIRE response into `;
+const TRANSLATE_PROMPT_SUFFIX = `. Keep code blocks, variable names, and technical terms in English, but translate all explanatory text, comments, and descriptions. Maintain the same formatting and structure.`;
+
+const CODE_REVIEW_PROMPT = `\n\nIMPORTANT: You are in **Expert Code Review Mode**. Analyze ALL code with extreme thoroughness:
+1. **🔴 Critical Issues**: Security vulnerabilities, data loss risks, crashes
+2. **🟡 Warnings**: Performance problems, memory leaks, race conditions
+3. **🟢 Suggestions**: Best practices, readability, maintainability
+4. **📊 Code Quality Score**: Rate the code 1-10 with justification
+5. **✅ Refactored Version**: Provide improved code with inline comments explaining changes
+6. Rate each issue severity and provide exact line references where possible.`;
 
 export interface AgentResponse {
   content: string;
@@ -203,10 +225,29 @@ export async function processAgentMessage(
 }
 
 function buildSystemPrompt(features: ChatFeatures): string {
+  let base = SYSTEM_PROMPT;
+  
   if (features.studyMode) {
-    return STUDY_MODE_PROMPT + (features.thinking ? THINKING_PROMPT : '');
+    base = STUDY_MODE_PROMPT;
   }
-  return SYSTEM_PROMPT + (features.thinking ? THINKING_PROMPT : '');
+  
+  if (features.thinking) {
+    base += THINKING_PROMPT;
+  }
+  
+  if (features.summarize) {
+    base += SUMMARIZE_PROMPT;
+  }
+  
+  if (features.translate && features.translate.trim()) {
+    base += TRANSLATE_PROMPT_PREFIX + features.translate.trim() + TRANSLATE_PROMPT_SUFFIX;
+  }
+  
+  if (features.codeReview) {
+    base += CODE_REVIEW_PROMPT;
+  }
+  
+  return base;
 }
 
 // Async function to build attachment context with proper document parsing

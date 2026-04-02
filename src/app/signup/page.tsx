@@ -8,10 +8,11 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
-import { Loader2, Mail, Lock, User as UserIcon, Chrome } from 'lucide-react';
+import { Loader2, Mail, Lock, User as UserIcon, AtSign, Chrome } from 'lucide-react';
 
 export default function SignUpPage() {
   const [displayName, setDisplayName] = useState('');
+  const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -43,7 +44,7 @@ export default function SignUpPage() {
     setLoading(true);
 
     try {
-      await signUpWithEmail(email, password, displayName);
+      await signUpWithEmail(email, password, displayName, username);
       setTimeout(() => {
         router.replace('/analyze');
       }, 300);
@@ -99,6 +100,22 @@ export default function SignUpPage() {
                 disabled={loading}
               />
             </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Username</label>
+            <div className="relative">
+              <AtSign className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                type="text"
+                placeholder="johndoe"
+                value={username}
+                onChange={(e) => setUsername(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
+                className="pl-10"
+                disabled={loading}
+              />
+            </div>
+            <p className="text-[11px] text-muted-foreground/60">Optional · letters, numbers, underscores</p>
           </div>
 
           <div className="space-y-2">

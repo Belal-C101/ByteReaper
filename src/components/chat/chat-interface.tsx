@@ -29,11 +29,17 @@ import {
   Brain,
   GraduationCap,
   BookOpen,
+  Zap,
+  Languages,
+  Code2,
+  Download,
+  ExternalLink,
+  Eye,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { ChatMessage, FileAttachment } from "@/types/chat";
+import { ChatMessage, FileAttachment, UploadedMediaLink } from "@/types/chat";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   ChatSession,
@@ -291,6 +297,12 @@ export function ChatInterface() {
   const [featureWebSearch, setFeatureWebSearch] = useState(false);
   const [featureThinking, setFeatureThinking] = useState(false);
   const [featureStudyMode, setFeatureStudyMode] = useState(false);
+  const [featureSummarize, setFeatureSummarize] = useState(false);
+  const [featureTranslate, setFeatureTranslate] = useState(false);
+  const [featureTranslateLanguage, setFeatureTranslateLanguage] = useState("Arabic");
+  const [featureCodeReview, setFeatureCodeReview] = useState(false);
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -550,9 +562,47 @@ export function ChatInterface() {
     let modelUsedForExchange = selectedModel;
     const needsNewSession = !sessionId || isDraftSessionId(sessionId);
 
+    // Upload attachments to Cloudinary in background
+    let uploadedImageLinks: UploadedMediaLink[] = [];
+    let uploadedFileLinks: UploadedMediaLink[] = [];
+
+    if (attachments.length > 0) {
+      setIsUploading(true);
+      try {
+        const formData = new FormData();
+        for (const att of attachments) {
+          if (att.content) {
+            // Convert data URL back to a File/Blob for upload
+            const resp = await fetch(att.content);
+            const blob = await resp.blob();
+            formData.append('files', blob, att.name);
+          }
+        }
+
+        const uploadRes = await fetch('/api/upload', { method: 'POST', body: formData });
+        if (uploadRes.ok) {
+          const uploadData = await uploadRes.json();
+          if (uploadData.images) {
+            uploadedImageLinks = uploadData.images.map((img: any) => ({ url: img.url, name: img.name, provider: img.provider }));
+          }
+          if (uploadData.files) {
+            uploadedFileLinks = uploadData.files.map((f: any) => ({ url: f.url, name: f.name, provider: f.provider }));
+          }
+        }
+      } catch (uploadErr) {
+        console.error('File upload to cloud failed:', uploadErr);
+        // Continue — we still have the local attachments for AI analysis
+      } finally {
+        setIsUploading(false);
+      }
+    }
+
     const userMessage: ChatMessage = {
       id: generateId(), role: "user", content: normalizedPrompt,
-      timestamp: new Date(), attachments: attachments.length > 0 ? [...attachments] : undefined,
+      timestamp: new Date(),
+      attachments: attachments.length > 0 ? [...attachments] : undefined,
+      imageLinks: uploadedImageLinks.length > 0 ? uploadedImageLinks : undefined,
+      fileLinks: uploadedFileLinks.length > 0 ? uploadedFileLinks : undefined,
     };
     const assistantId = generateId();
 
@@ -578,6 +628,9 @@ export function ChatInterface() {
             webSearch: featureWebSearch,
             thinking: featureThinking,
             studyMode: featureStudyMode,
+            summarize: featureSummarize,
+            translate: featureTranslate ? featureTranslateLanguage : undefined,
+            codeReview: featureCodeReview,
           },
         }),
       });
@@ -1034,19 +1087,45 @@ export function ChatInterface() {
                     exit={{ height: 0, opacity: 0 }}
                     className="overflow-hidden"
                   >
-                    <div className="px-4 pt-3 flex flex-wrap gap-1.5">
-                      {attachments.map((attachment) => (
-                        <div
-                          key={attachment.id}
-                          className="flex items-center gap-1.5 px-2.5 py-1 bg-secondary/60 rounded-lg text-xs"
-                        >
-                          <FileIcon type={getFileType({ name: attachment.name, type: attachment.type })} />
-                          <span className="max-w-[140px] truncate text-muted-foreground">{attachment.name}</span>
-                          <button onClick={() => removeAttachment(attachment.id)} className="hover:text-destructive transition-colors">
-                            <X className="h-3 w-3" />
-                          </button>
-                        </div>
-                      ))}
+                    <div className="px-4 pt-3 flex flex-wrap gap-2">
+                      {attachments.map((attachment) => {
+                        const fileType = getFileType({ name: attachment.name, type: attachment.type });
+                        const isImage = fileType === "image";
+
+                        return isImage && attachment.preview ? (
+                          <div key={attachment.id} className="relative group">
+                            <button
+                              type="button"
+                              onClick={() => setLightboxImage(attachment.preview || null)}
+                              className="block rounded-lg overflow-hidden border border-border/40 hover:border-primary/40 transition-all duration-200"
+                            >
+                              <img
+                                src={attachment.preview}
+                                alt={attachment.name}
+                                className="h-20 w-20 object-cover"
+                              />
+                            </button>
+                            <button
+                              onClick={() => removeAttachment(attachment.id)}
+                              className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                            <p className="text-[10px] text-muted-foreground/60 truncate max-w-[80px] mt-0.5 text-center">{attachment.name}</p>
+                          </div>
+                        ) : (
+                          <div
+                            key={attachment.id}
+                            className="flex items-center gap-1.5 px-2.5 py-1 bg-secondary/60 rounded-lg text-xs"
+                          >
+                            <FileIcon type={fileType} />
+                            <span className="max-w-[140px] truncate text-muted-foreground">{attachment.name}</span>
+                            <button onClick={() => removeAttachment(attachment.id)} className="hover:text-destructive transition-colors">
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
                   </motion.div>
                 )}
@@ -1068,7 +1147,7 @@ export function ChatInterface() {
                     disabled={isLoading}
                     className={cn(
                       "p-2 rounded-lg transition-all duration-150 disabled:opacity-40",
-                      featuresMenuOpen || featureWebSearch || featureThinking || featureStudyMode
+                      featuresMenuOpen || featureWebSearch || featureThinking || featureStudyMode || featureSummarize || featureTranslate || featureCodeReview
                         ? "text-primary bg-primary/10"
                         : "text-muted-foreground/60 hover:text-foreground hover:bg-accent/50"
                     )}
@@ -1129,6 +1208,58 @@ export function ChatInterface() {
                               <span className={featureStudyMode ? "font-medium" : ""}>Study Mode</span>
                             </div>
                             {featureStudyMode && <Check className="h-4 w-4 text-green-500" />}
+                          </button>
+
+                          <div className="mx-1.5 my-1 border-t border-border/30" />
+                          <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground/50 uppercase tracking-wider">
+                            Response Modes
+                          </div>
+
+                          <button
+                            onClick={() => setFeatureSummarize(!featureSummarize)}
+                            className="w-full flex items-center justify-between gap-2 px-2 py-2 rounded-md hover:bg-accent hover:text-accent-foreground text-sm transition-colors text-left"
+                          >
+                            <div className="flex items-center gap-2">
+                              <Zap className={cn("h-4 w-4", featureSummarize ? "text-amber-500" : "text-muted-foreground")} />
+                              <span className={featureSummarize ? "font-medium" : ""}>Summarize</span>
+                            </div>
+                            {featureSummarize && <Check className="h-4 w-4 text-amber-500" />}
+                          </button>
+
+                          <button
+                            onClick={() => setFeatureTranslate(!featureTranslate)}
+                            className="w-full flex items-center justify-between gap-2 px-2 py-2 rounded-md hover:bg-accent hover:text-accent-foreground text-sm transition-colors text-left"
+                          >
+                            <div className="flex items-center gap-2">
+                              <Languages className={cn("h-4 w-4", featureTranslate ? "text-cyan-500" : "text-muted-foreground")} />
+                              <span className={featureTranslate ? "font-medium" : ""}>Translate</span>
+                            </div>
+                            {featureTranslate && <Check className="h-4 w-4 text-cyan-500" />}
+                          </button>
+
+                          {featureTranslate && (
+                            <div className="px-2 pb-1">
+                              <select
+                                value={featureTranslateLanguage}
+                                onChange={(e) => setFeatureTranslateLanguage(e.target.value)}
+                                className="w-full text-xs px-2 py-1.5 rounded-md bg-background/80 border border-border/50 text-foreground"
+                              >
+                                {["Arabic", "Spanish", "French", "German", "Chinese", "Japanese", "Korean", "Portuguese", "Russian", "Italian", "Hindi", "Turkish", "Dutch", "Polish"].map((lang) => (
+                                  <option key={lang} value={lang}>{lang}</option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+
+                          <button
+                            onClick={() => setFeatureCodeReview(!featureCodeReview)}
+                            className="w-full flex items-center justify-between gap-2 px-2 py-2 rounded-md hover:bg-accent hover:text-accent-foreground text-sm transition-colors text-left"
+                          >
+                            <div className="flex items-center gap-2">
+                              <Code2 className={cn("h-4 w-4", featureCodeReview ? "text-rose-500" : "text-muted-foreground")} />
+                              <span className={featureCodeReview ? "font-medium" : ""}>Code Review</span>
+                            </div>
+                            {featureCodeReview && <Check className="h-4 w-4 text-rose-500" />}
                           </button>
                         </motion.div>
                       </>
@@ -1195,15 +1326,71 @@ export function ChatInterface() {
                         <GraduationCap className="h-3 w-3" /> Study Mode
                       </span>
                     )}
+                    {featureSummarize && (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                        <Zap className="h-3 w-3" /> Summarize
+                      </span>
+                    )}
+                    {featureTranslate && (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-cyan-500/10 text-cyan-500 border border-cyan-500/20">
+                        <Languages className="h-3 w-3" /> {featureTranslateLanguage}
+                      </span>
+                    )}
+                    {featureCodeReview && (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-rose-500/10 text-rose-500 border border-rose-500/20">
+                        <Code2 className="h-3 w-3" /> Review
+                      </span>
+                    )}
                   </div>
                 </div>
 
-                <p className="text-[10px] text-muted-foreground/40 hidden sm:block">Shift+Enter for new line</p>
+                <div className="flex items-center gap-2">
+                  {isUploading && (
+                    <span className="text-[10px] text-primary/60 flex items-center gap-1">
+                      <Loader2 className="h-3 w-3 animate-spin" /> Uploading...
+                    </span>
+                  )}
+                  <p className="text-[10px] text-muted-foreground/40 hidden sm:block">Shift+Enter for new line</p>
+                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
+
+      {/* ─── Lightbox Image Preview ──────────────── */}
+      <AnimatePresence>
+        {lightboxImage && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 cursor-pointer"
+            onClick={() => setLightboxImage(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              className="relative max-w-[90vw] max-h-[90vh]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <img
+                src={lightboxImage}
+                alt="Preview"
+                className="max-w-full max-h-[85vh] rounded-xl shadow-2xl object-contain"
+              />
+              <button
+                onClick={() => setLightboxImage(null)}
+                className="absolute -top-3 -right-3 h-8 w-8 rounded-full bg-background/90 border border-border/50 flex items-center justify-center text-foreground hover:bg-background transition-colors shadow-lg"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -1285,8 +1472,53 @@ function MessageBubble({ message, isLast }: { message: ChatMessage; isLast?: boo
       )}
 
       <div className={cn("max-w-[85%] md:max-w-[75%]", isUser && "flex flex-col items-end")}>
-        {/* Attachments */}
-        {message.attachments && message.attachments.length > 0 && (
+        {/* Uploaded Image Previews */}
+        {message.imageLinks && message.imageLinks.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-2">
+            {message.imageLinks.map((link, i) => (
+              <a
+                key={`img-${i}`}
+                href={link.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block rounded-lg overflow-hidden border border-border/40 hover:border-primary/40 transition-all duration-200 group relative"
+              >
+                <img
+                  src={link.url}
+                  alt={link.name}
+                  className="h-24 w-24 sm:h-32 sm:w-32 object-cover"
+                  loading="lazy"
+                />
+                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+                  <Eye className="h-5 w-5 text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow-lg" />
+                </div>
+                <p className="text-[9px] text-muted-foreground/50 truncate max-w-[96px] sm:max-w-[128px] px-1 py-0.5">{link.name}</p>
+              </a>
+            ))}
+          </div>
+        )}
+
+        {/* Uploaded File Links */}
+        {message.fileLinks && message.fileLinks.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {message.fileLinks.map((link, i) => (
+              <a
+                key={`file-${i}`}
+                href={link.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-secondary/60 hover:bg-secondary/80 text-xs text-muted-foreground hover:text-foreground transition-colors border border-border/30"
+              >
+                <Download className="h-3.5 w-3.5" />
+                <span className="max-w-[150px] truncate">{link.name}</span>
+                <ExternalLink className="h-3 w-3 text-muted-foreground/40" />
+              </a>
+            ))}
+          </div>
+        )}
+
+        {/* Attachment Metadata Chips */}
+        {message.attachments && message.attachments.length > 0 && !message.imageLinks?.length && (
           <div className="flex flex-wrap gap-1.5 mb-2">
             {message.attachments.map((attachment) => (
               <span key={attachment.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-secondary/60 text-xs text-muted-foreground">

@@ -349,9 +349,7 @@ export function ChatInterface() {
             ? preferredSessionId
             : sessionId && mergedSessions.some((s) => s.id === sessionId)
               ? sessionId
-              : mergedSessions.length > 0
-                ? mergedSessions[0].id
-                : null;
+              : null;
         if (nextSessionId !== sessionId) setSessionId(nextSessionId);
       } catch (error) {
         console.error("Failed to load chat sessions:", error);
@@ -1138,7 +1136,12 @@ export function ChatInterface() {
                   type="file"
                   multiple
                   className="hidden"
-                  onChange={(e) => e.target.files && void handleFileUpload(e.target.files)}
+                  onChange={(e) => {
+                    const files = e.target.files;
+                    if (!files || files.length === 0) return;
+                    void handleFileUpload(files);
+                    e.currentTarget.value = "";
+                  }}
                 />
 
                 <div className="relative">
@@ -1163,7 +1166,7 @@ export function ChatInterface() {
                           initial={{ opacity: 0 }}
                           animate={{ opacity: 1 }}
                           exit={{ opacity: 0 }}
-                          className="fixed inset-0 z-40 sm:hidden"
+                          className="fixed inset-0 z-40"
                           onClick={() => setFeaturesMenuOpen(false)}
                         />
                         <motion.div

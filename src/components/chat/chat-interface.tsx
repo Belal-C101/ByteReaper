@@ -590,9 +590,29 @@ export function ChatInterface() {
         const formData = new FormData();
         for (const att of attachments) {
           if (att.content) {
-            // Convert data URL back to a File/Blob for upload
-            const resp = await fetch(att.content);
-            const blob = await resp.blob();
+            let blob: Blob;
+            if (att.content.startsWith('data:')) {
+              try {
+                // Robust dataURL to Blob (avoids browser fetch URL length limits)
+                const arr = att.content.split(',');
+                const mimeMatch = arr[0].match(/:(.*?);/);
+                const mime = mimeMatch ? mimeMatch[1] : (att.type || 'application/octet-stream');
+                const bstr = atob(arr[1]);
+                let n = bstr.length;
+                const u8arr = new Uint8Array(n);
+                while (n--) {
+                  u8arr[n] = bstr.charCodeAt(n);
+                }
+                blob = new Blob([u8arr], { type: mime });
+              } catch (e) {
+                // Fallback
+                const resp = await fetch(att.content);
+                blob = await resp.blob();
+              }
+            } else {
+              // Raw text content
+              blob = new Blob([att.content], { type: att.type || 'text/plain' });
+            }
             formData.append('files', blob, att.name);
           }
         }

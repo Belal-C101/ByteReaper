@@ -5,7 +5,7 @@ import 'server-only';
 export interface UploadResult {
   url: string;
   publicId: string;
-  provider: 'cloudinary' | 'imgur' | 'fileio';
+  provider: 'cloudinary' | 'imgur' | 'tmpfiles';
   type: 'image' | 'file';
   name: string;
 }
@@ -248,37 +248,42 @@ async function uploadToImgur(fileBuffer: Buffer, fileName: string): Promise<Uplo
   }
 }
 
-// ─── file.io Fallback (Any File) ───────────────────────────
+// ─── Tmpfiles.org Fallback (Any File) ──────────────────────
 
-async function uploadToFileIo(fileBuffer: Buffer, fileName: string, mimeType: string): Promise<UploadResult | null> {
+async function uploadToTmpfiles(fileBuffer: Buffer, fileName: string, mimeType: string): Promise<UploadResult | null> {
   try {
     const formData = new FormData();
     const blob = new Blob([fileBuffer.buffer.slice(fileBuffer.byteOffset, fileBuffer.byteOffset + fileBuffer.byteLength) as ArrayBuffer], { type: mimeType });
     formData.append('file', blob, fileName);
 
-    const res = await fetch('https://file.io/?expires=14d', {
+    const res = await fetch('https://tmpfiles.org/api/v1/upload', {
       method: 'POST',
       body: formData,
     });
 
     if (!res.ok) {
-      console.error('[file.io] Upload failed:', res.status);
+      console.error('[tmpfiles] Upload failed:', res.status);
       return null;
     }
 
     const data = await res.json();
-    if (!data.success || !data.link) return null;
+    if (!data.data?.url) return null;
+
+    // Convert tmpfiles URL to a direct download link by inserting 'dl/'
+    const directUrl = data.data.url.replace('tmpfiles.org/', 'tmpfiles.org/dl/');
+    const keyMatch = data.data.url.match(/tmpfiles\.org\/([^/]+)/);
+    const keyId = keyMatch ? keyMatch[1] : '';
 
     const isImage = mimeType.startsWith('image/');
     return {
-      url: data.link,
-      publicId: data.key || '',
-      provider: 'fileio',
+      url: directUrl,
+      publicId: keyId,
+      provider: 'tmpfiles',
       type: isImage ? 'image' : 'file',
       name: fileName,
     };
   } catch (error) {
-    console.error('[file.io] Upload error:', error);
+    console.error('[tmpfiles] Upload error:', error);
     return null;
   }
 }
@@ -292,23 +297,29 @@ export async function uploadFile(
 ): Promise<UploadResult> {
   const isImage = mimeType.startsWith('image/');
 
-  // Try Cloudinary first
-  const cloudinaryResult = await uploadToCloudinary(fileBuffer, fileName, mimeType);
-  if (cloudinaryResult) return cloudinaryResult;
-
-  console.log(`[Upload] Cloudinary failed for ${fileName}, trying fallback...`);
-
-  // Fallback: Imgur for images, file.io for files
   if (isImage) {
+    // 1. For images, try Imgur FIRST (per user request)
     const imgurResult = await uploadToImgur(fileBuffer, fileName);
     if (imgurResult) return imgurResult;
 
-    console.log(`[Upload] Imgur also failed for ${fileName}, trying file.io...`);
+    console.log(`[Upload] Imgur failed for ${fileName}, trying Cloudinary...`);
+
+    // 2. Fallback to Cloudinary for images
+    const cloudinaryResult = await uploadToCloudinary(fileBuffer, fileName, mimeType);
+    if (cloudinaryResult) return cloudinaryResult;
+
+    console.log(`[Upload] Cloudinary also failed for ${fileName}, trying tmpfiles...`);
+  } else {
+    // 1. For non-images (files), try Cloudinary FIRST
+    const cloudinaryResult = await uploadToCloudinary(fileBuffer, fileName, mimeType);
+    if (cloudinaryResult) return cloudinaryResult;
+
+    console.log(`[Upload] Cloudinary failed for file ${fileName}, trying tmpfiles...`);
   }
 
-  // Final fallback: file.io for anything
-  const fileIoResult = await uploadToFileIo(fileBuffer, fileName, mimeType);
-  if (fileIoResult) return fileIoResult;
+  // Final fallback: tmpfiles.org handles anything if the preferred hosts fail
+  const tmpfilesResult = await uploadToTmpfiles(fileBuffer, fileName, mimeType);
+  if (tmpfilesResult) return tmpfilesResult;
 
   // If everything fails, throw
   throw new Error(`Failed to upload ${fileName} — all providers failed. Check your API credentials.`);

@@ -306,6 +306,7 @@ export function ChatInterface() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const featuresMenuRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dragCounterRef = useRef(0);
 
@@ -401,6 +402,25 @@ export function ChatInterface() {
       textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
     }
   }, [input]);
+
+  useEffect(() => {
+    if (!featuresMenuOpen) return;
+
+    const handleOutsidePointer = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (featuresMenuRef.current?.contains(target)) return;
+      setFeaturesMenuOpen(false);
+    };
+
+    document.addEventListener("mousedown", handleOutsidePointer);
+    document.addEventListener("touchstart", handleOutsidePointer);
+
+    return () => {
+      document.removeEventListener("mousedown", handleOutsidePointer);
+      document.removeEventListener("touchstart", handleOutsidePointer);
+    };
+  }, [featuresMenuOpen]);
 
   const handleCreateNewChat = useCallback(async () => {
     if (!user || isLoading) return;
@@ -1144,7 +1164,7 @@ export function ChatInterface() {
                   }}
                 />
 
-                <div className="relative">
+                <div ref={featuresMenuRef} className="relative">
                   <button
                     onClick={() => setFeaturesMenuOpen(!featuresMenuOpen)}
                     disabled={isLoading}
@@ -1161,21 +1181,13 @@ export function ChatInterface() {
 
                   <AnimatePresence>
                     {featuresMenuOpen && (
-                      <>
-                        <motion.div
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          exit={{ opacity: 0 }}
-                          className="fixed inset-0 z-40"
-                          onClick={() => setFeaturesMenuOpen(false)}
-                        />
-                        <motion.div
-                          initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                          animate={{ opacity: 1, scale: 1, y: 0 }}
-                          exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                          transition={{ duration: 0.15 }}
-                          className="absolute bottom-full left-0 mb-2 w-[240px] z-50 rounded-xl border border-border/50 bg-popover p-1 shadow-xl outline-none"
-                        >
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                        transition={{ duration: 0.15 }}
+                        className="absolute bottom-full left-0 mb-2 w-[240px] z-50 rounded-xl border border-border/50 bg-popover p-1 shadow-xl outline-none"
+                      >
                           <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                             AI Abilities
                           </div>
@@ -1264,8 +1276,7 @@ export function ChatInterface() {
                             </div>
                             {featureCodeReview && <Check className="h-4 w-4 text-rose-500" />}
                           </button>
-                        </motion.div>
-                      </>
+                      </motion.div>
                     )}
                   </AnimatePresence>
                 </div>

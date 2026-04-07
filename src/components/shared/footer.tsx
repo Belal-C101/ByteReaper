@@ -19,16 +19,17 @@ export function Footer() {
             ByteReaper — AI-Powered Code Analysis
           </span>
         </div>
-        <a
-          href="https://www.linkedin.com/in/belal-hegab"
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label="Belal Hegab LinkedIn"
-        >
-          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground">
-            <Linkedin className="h-4 w-4" />
-          </Button>
-        </a>
+        <Button asChild variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground">
+          <a
+            href="https://www.linkedin.com/in/belal-hegab"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Open Belal Hegab LinkedIn profile"
+            title="Open Belal Hegab LinkedIn profile"
+          >
+            <Linkedin className="h-4 w-4" aria-hidden="true" />
+          </a>
+        </Button>
       </div>
     </footer>
   );

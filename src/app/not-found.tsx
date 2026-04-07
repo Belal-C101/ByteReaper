@@ -16,9 +16,9 @@ export default function NotFound() {
       <p className="text-muted-foreground mb-8 max-w-md">
         The page you're looking for doesn't exist or the report has been removed.
       </p>
-      <Link href="/">
-        <Button>Go Home</Button>
-      </Link>
+      <Button asChild>
+        <Link href="/">Go Home</Link>
+      </Button>
     </div>
   );
 }

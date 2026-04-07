@@ -86,12 +86,12 @@ export function AuthWall() {
         <motion.div
           animate={{ x: [0, -25, 0], y: [0, 15, 0] }}
           transition={{ duration: 25, repeat: Infinity, ease: "easeInOut" }}
-          className="absolute bottom-[10%] right-[10%] w-[400px] h-[400px] rounded-full bg-blue-400/[0.06] blur-[100px]"
+          className="absolute bottom-[10%] right-[10%] w-[400px] h-[400px] rounded-full bg-blue-400/[0.03] blur-[100px]"
         />
         <motion.div
           animate={{ x: [0, 15, 0], y: [0, 25, 0] }}
           transition={{ duration: 18, repeat: Infinity, ease: "easeInOut" }}
-          className="absolute top-[50%] left-[60%] w-[300px] h-[300px] rounded-full bg-slate-400/[0.04] blur-[80px]"
+          className="absolute top-[50%] left-[60%] w-[300px] h-[300px] rounded-full bg-slate-400/[0.02] blur-[80px]"
         />
       </div>
 
@@ -169,7 +169,7 @@ export function AuthWall() {
                     <span className="w-full border-t border-border/60" />
                   </div>
                   <div className="relative flex justify-center text-xs uppercase">
-                    <span className="bg-card px-3 text-muted-foreground/60">or</span>
+                    <span className="bg-card px-3 text-muted-foreground">or</span>
                   </div>
                 </div>
 
@@ -207,14 +207,14 @@ export function AuthWall() {
           >
             <div className="relative">
               {/* Main showcase card */}
-              <div className="rounded-2xl border border-border/40 bg-card/40 backdrop-blur-lg overflow-hidden shadow-2xl shadow-black/[0.04] dark:shadow-black/[0.2]">
+              <div className="rounded-2xl border border-border/50 bg-card/70 backdrop-blur-lg overflow-hidden shadow-2xl shadow-black/[0.04] dark:shadow-black/[0.2]">
                 <div className="p-6 md:p-8">
                   {/* Terminal-style header */}
                   <div className="flex items-center gap-2 mb-6">
                     <div className="h-3 w-3 rounded-full bg-red-400/60" />
                     <div className="h-3 w-3 rounded-full bg-yellow-400/60" />
                     <div className="h-3 w-3 rounded-full bg-green-400/60" />
-                    <span className="ml-3 text-xs text-muted-foreground/50 font-mono">bytereaper.ai</span>
+                    <span className="ml-3 text-xs text-muted-foreground font-mono">bytereaper.ai</span>
                   </div>
 
                   {/* Chat preview */}
@@ -262,11 +262,11 @@ export function AuthWall() {
                         initial={{ opacity: 0, y: 8 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: 1.1 + i * 0.08, duration: 0.3 }}
-                        className="group rounded-xl border border-border/40 bg-background/50 p-3.5 hover:border-primary/30 hover:bg-primary/[0.03] transition-all duration-300"
+                        className="group rounded-xl border border-border/60 bg-background/80 p-3.5 hover:border-primary/40 hover:bg-primary/[0.06] transition-all duration-300"
                       >
-                        <cap.icon className="h-4.5 w-4.5 text-primary/70 mb-2 group-hover:text-primary transition-colors" />
+                        <cap.icon className="h-4.5 w-4.5 text-primary/90 mb-2 group-hover:text-primary transition-colors" />
                         <p className="text-sm font-medium mb-0.5">{cap.label}</p>
-                        <p className="text-xs text-muted-foreground/70">{cap.desc}</p>
+                        <p className="text-xs text-muted-foreground">{cap.desc}</p>
                       </motion.div>
                     ))}
                   </motion.div>

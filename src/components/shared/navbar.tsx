@@ -57,12 +57,12 @@ export function Navbar() {
           <nav className="flex items-center gap-1">
             {user ? (
               <>
-                <Link href="/analyze">
-                  <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-foreground transition-colors">
+                <Button asChild variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-foreground transition-colors">
+                  <Link href="/analyze">
                     <MessageSquare className="h-4 w-4" />
                     <span className="hidden sm:inline text-sm">Chat</span>
-                  </Button>
-                </Link>
+                  </Link>
+                </Button>
 
                 {/* Profile dropdown */}
                 <div className="relative hidden md:block">
@@ -135,6 +135,8 @@ export function Navbar() {
                   variant="ghost"
                   size="sm"
                   onClick={handleSignOut}
+                  aria-label="Sign out"
+                  title="Sign out"
                   className="gap-1.5 text-muted-foreground hover:text-foreground transition-colors md:hidden"
                 >
                   <LogOut className="h-3.5 w-3.5" />
@@ -142,16 +144,16 @@ export function Navbar() {
               </>
             ) : (
               <>
-                <Link href="/login">
-                  <Button variant="ghost" size="sm" className="text-sm text-muted-foreground hover:text-foreground">
+                <Button asChild variant="ghost" size="sm" className="text-sm text-muted-foreground hover:text-foreground">
+                  <Link href="/login">
                     Login
-                  </Button>
-                </Link>
-                <Link href="/signup">
-                  <Button size="sm" className="text-sm shadow-sm">
+                  </Link>
+                </Button>
+                <Button asChild size="sm" className="text-sm shadow-sm">
+                  <Link href="/signup">
                     Sign Up
-                  </Button>
-                </Link>
+                  </Link>
+                </Button>
               </>
             )}
 
@@ -168,15 +170,17 @@ export function Navbar() {
               <span className="sr-only">Toggle theme</span>
             </Button>
 
-            <a
-              href="https://github.com/Belal-C101/ByteReaper"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground">
-                <Github className="h-4 w-4" />
-              </Button>
-            </a>
+            <Button asChild variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground">
+              <a
+                href="https://github.com/Belal-C101/ByteReaper"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Open ByteReaper GitHub repository"
+                title="Open ByteReaper GitHub repository"
+              >
+                <Github className="h-4 w-4" aria-hidden="true" />
+              </a>
+            </Button>
           </nav>
         </div>
       </header>

@@ -1197,7 +1197,16 @@ export function ChatInterface() {
           }
         }
 
-        const uploadRes = await fetch('/api/upload', { method: 'POST', body: formData });
+        const uploadController = new AbortController();
+        const uploadTimeout = window.setTimeout(() => uploadController.abort(), 15000);
+
+        const uploadRes = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData,
+          signal: uploadController.signal,
+        }).finally(() => {
+          window.clearTimeout(uploadTimeout);
+        });
         if (uploadRes.ok) {
           const uploadData = await uploadRes.json();
           const normalizedImages = normalizeUploadedMediaLinks(uploadData.images);

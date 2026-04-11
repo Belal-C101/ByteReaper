@@ -231,6 +231,89 @@ function resolveMimeType(file: FileLike): string {
   return EXTENSION_MIME_MAP[ext] || "application/octet-stream";
 }
 
+function textToDataUrl(content: string, mimeType: string): string {
+  const bytes = new TextEncoder().encode(content);
+  let binary = "";
+
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+
+  return `data:${mimeType};base64,${btoa(binary)}`;
+}
+
+function attachmentToDataUrl(attachment: FileAttachment): string | null {
+  if (attachment.preview) return attachment.preview;
+  if (!attachment.content) return null;
+  if (attachment.content.startsWith("data:")) return attachment.content;
+
+  try {
+    const mimeType = resolveMimeType({ name: attachment.name, type: attachment.type });
+    return textToDataUrl(attachment.content, mimeType);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeUploadedMediaLinks(rawLinks: any[] | undefined): UploadedMediaLink[] {
+  if (!Array.isArray(rawLinks)) return [];
+
+  return rawLinks
+    .map((link) => ({
+      url: typeof link?.url === "string" ? link.url.trim() : "",
+      name: typeof link?.name === "string" && link.name.trim().length > 0 ? link.name.trim() : "Attachment",
+      provider: typeof link?.provider === "string" ? link.provider : undefined,
+    }))
+    .filter((link) => link.url.length > 0);
+}
+
+function buildAttachmentMediaLinks(
+  sourceAttachments: FileAttachment[],
+  uploadedImages: UploadedMediaLink[],
+  uploadedFiles: UploadedMediaLink[]
+): { imageLinks: UploadedMediaLink[]; fileLinks: UploadedMediaLink[]; fallbackCount: number; missingCount: number } {
+  const remainingImages = [...uploadedImages];
+  const remainingFiles = [...uploadedFiles];
+  const imageLinks: UploadedMediaLink[] = [];
+  const fileLinks: UploadedMediaLink[] = [];
+  let fallbackCount = 0;
+  let missingCount = 0;
+
+  sourceAttachments.forEach((attachment) => {
+    const attachmentType = getFileType({ name: attachment.name, type: attachment.type });
+    const isImageAttachment = attachmentType === "image";
+    const pool = isImageAttachment ? remainingImages : remainingFiles;
+
+    const exactIndex = pool.findIndex((link) => link.name === attachment.name);
+    const pickedIndex = exactIndex >= 0 ? exactIndex : pool.findIndex((link) => Boolean(link.url));
+
+    if (pickedIndex >= 0) {
+      const [pickedLink] = pool.splice(pickedIndex, 1);
+      if (isImageAttachment) imageLinks.push(pickedLink);
+      else fileLinks.push(pickedLink);
+      return;
+    }
+
+    const fallbackUrl = attachmentToDataUrl(attachment);
+    if (fallbackUrl) {
+      const fallbackLink: UploadedMediaLink = {
+        url: fallbackUrl,
+        name: attachment.name,
+        provider: "inline-data-url",
+      };
+
+      if (isImageAttachment) imageLinks.push(fallbackLink);
+      else fileLinks.push(fallbackLink);
+      fallbackCount += 1;
+      return;
+    }
+
+    missingCount += 1;
+  });
+
+  return { imageLinks, fileLinks, fallbackCount, missingCount };
+}
+
 function getFileType(file: FileLike): "code" | "image" | "text" | "other" {
   const ext = file.name.split(".").pop()?.toLowerCase() || "";
   const mimeType = resolveMimeType(file);
@@ -238,6 +321,7 @@ function getFileType(file: FileLike): "code" | "image" | "text" | "other" {
   const imageExts = ["jpg", "jpeg", "png", "gif", "webp", "svg"];
   if (codeExts.includes(ext)) return "code";
   if (imageExts.includes(ext)) return "image";
+  if (mimeType.startsWith("image/")) return "image";
   if (mimeType.startsWith("text/")) return "text";
   return "other";
 }
@@ -953,22 +1037,45 @@ export function ChatInterface() {
         const uploadRes = await fetch('/api/upload', { method: 'POST', body: formData });
         if (uploadRes.ok) {
           const uploadData = await uploadRes.json();
-          if (uploadData.images) {
-            uploadedImageLinks = uploadData.images.map((img: any) => ({ url: img.url, name: img.name, provider: img.provider }));
-          }
-          if (uploadData.files) {
-            uploadedFileLinks = uploadData.files.map((f: any) => ({ url: f.url, name: f.name, provider: f.provider }));
-          }
+          const normalizedImages = normalizeUploadedMediaLinks(uploadData.images);
+          const normalizedFiles = normalizeUploadedMediaLinks(uploadData.files);
 
-          const uploadedCount = (uploadedImageLinks.length || 0) + (uploadedFileLinks.length || 0);
-          if (uploadedCount < attachments.length) {
+          const linkSet = buildAttachmentMediaLinks(attachments, normalizedImages, normalizedFiles);
+          uploadedImageLinks = linkSet.imageLinks;
+          uploadedFileLinks = linkSet.fileLinks;
+
+          const uploadedCount = normalizedImages.length + normalizedFiles.length;
+          if (linkSet.missingCount > 0) {
             setChatError(
-              `Uploaded ${uploadedCount}/${attachments.length} attachment(s). Some file links may be missing.`
+              `Some attachments could not be linked (${linkSet.missingCount}/${attachments.length}). Try re-uploading those files.`
             );
+          } else if (uploadedCount < attachments.length) {
+            setChatError(
+              `Uploaded ${uploadedCount}/${attachments.length} attachment(s) to cloud. ${linkSet.fallbackCount} attachment(s) are shared using inline fallback links.`
+            );
+          }
+        } else {
+          const linkSet = buildAttachmentMediaLinks(attachments, [], []);
+          uploadedImageLinks = linkSet.imageLinks;
+          uploadedFileLinks = linkSet.fileLinks;
+          if (linkSet.missingCount > 0) {
+            setChatError(
+              `Upload failed and ${linkSet.missingCount} attachment(s) could not be linked.`
+            );
+          } else if (attachments.length > 0) {
+            setChatError("Cloud upload failed. Attachments are shared with inline fallback links.");
           }
         }
       } catch (uploadErr) {
         console.error('File upload to cloud failed:', uploadErr);
+        const linkSet = buildAttachmentMediaLinks(attachments, [], []);
+        uploadedImageLinks = linkSet.imageLinks;
+        uploadedFileLinks = linkSet.fileLinks;
+        if (linkSet.missingCount > 0) {
+          setChatError(`Upload failed and ${linkSet.missingCount} attachment(s) could not be linked.`);
+        } else if (attachments.length > 0) {
+          setChatError("Cloud upload failed. Attachments are shared with inline fallback links.");
+        }
         // Continue — we still have the local attachments for AI analysis
       } finally {
         setIsUploading(false);

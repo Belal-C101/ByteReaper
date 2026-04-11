@@ -100,6 +100,20 @@ function sanitizeAttachmentsForStorage(
   return attachments.map((a) => ({ id: a.id, name: a.name, type: a.type, size: a.size }));
 }
 
+function sanitizeMediaLinksForStorage(
+  links: ChatMessage['imageLinks'] | ChatMessage['fileLinks'] | null | undefined
+): StoredMediaLink[] {
+  if (!links || links.length === 0) return [];
+
+  return links
+    .map((link) => ({
+      url: typeof link.url === 'string' ? link.url.trim() : '',
+      name: typeof link.name === 'string' && link.name.trim().length > 0 ? link.name.trim() : 'Attachment',
+      provider: typeof link.provider === 'string' ? link.provider : undefined,
+    }))
+    .filter((link) => link.url.length > 0);
+}
+
 function parseFirestoreDate(value: unknown): Date {
   if (value instanceof Timestamp) {
     return value.toDate();
@@ -450,14 +464,8 @@ export async function saveChatExchange(
     // CRITICAL: Strip binary content from attachments to stay under Firestore 1 MB limit.
     // Only store metadata (id, name, type, size) — not the base64 data URLs.
     // Build image/file link arrays from uploaded attachments
-    const imageLinks: StoredMediaLink[] = [];
-    const fileLinks: StoredMediaLink[] = [];
-    if (userMessage.imageLinks && userMessage.imageLinks.length > 0) {
-      userMessage.imageLinks.forEach((link) => imageLinks.push({ url: link.url, name: link.name, provider: link.provider }));
-    }
-    if (userMessage.fileLinks && userMessage.fileLinks.length > 0) {
-      userMessage.fileLinks.forEach((link) => fileLinks.push({ url: link.url, name: link.name, provider: link.provider }));
-    }
+    const imageLinks = sanitizeMediaLinksForStorage(userMessage.imageLinks);
+    const fileLinks = sanitizeMediaLinksForStorage(userMessage.fileLinks);
 
     const messagePair: MessagePair = {
       userMessage: userMessage.content,

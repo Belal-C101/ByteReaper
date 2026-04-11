@@ -1144,6 +1144,54 @@ export function ChatInterface() {
     window.open(`/tools/playground#${hash}`, "_blank");
   }, []);
 
+  const handleLegacyFileLinkClick = useCallback(async (message: ChatMessage, link: UploadedMediaLink) => {
+    if (!isDataUrl(link.url)) {
+      window.open(link.url, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    if (!sessionId || !user?.uid || isDraftSessionId(sessionId)) {
+      openInlineDataFile(link.url, link.name);
+      return;
+    }
+
+    const migrated = await uploadLegacyDataUrlLink(link.url, link.name);
+    if (!migrated) {
+      openInlineDataFile(link.url, link.name);
+      return;
+    }
+
+    const nextFileLinks = (message.fileLinks || []).map((candidate) =>
+      candidate.url === link.url && candidate.name === link.name ? migrated : candidate
+    );
+    const nextImageLinks = (message.imageLinks || []).map((candidate) =>
+      candidate.url === link.url && candidate.name === link.name ? migrated : candidate
+    );
+
+    setMessages((prev) =>
+      prev.map((candidate) =>
+        candidate.id === message.id
+          ? {
+              ...candidate,
+              fileLinks: nextFileLinks,
+              imageLinks: nextImageLinks,
+            }
+          : candidate
+      )
+    );
+
+    try {
+      await updateSessionUserMessageLinks(sessionId, user.uid, message.id, {
+        fileLinks: nextFileLinks,
+        imageLinks: nextImageLinks,
+      });
+    } catch (error) {
+      console.error("Failed to persist migrated file link:", error);
+    }
+
+    window.open(migrated.url, "_blank", "noopener,noreferrer");
+  }, [sessionId, user?.uid, isDraftSessionId]);
+
   const openRunner = useCallback((language: string, value: string) => {
     const normalized = language.toLowerCase();
     if (!["javascript", "js", "typescript", "ts", "html"].includes(normalized)) return;
@@ -1741,6 +1789,7 @@ export function ChatInterface() {
                   codeTheme={codeTheme}
                   onRunCode={openRunner}
                   onSendToPlayground={sendCodeToPlayground}
+                  onLegacyFileLinkClick={handleLegacyFileLinkClick}
                 />
               ))
             )}
@@ -2274,12 +2323,14 @@ function MessageBubble({
   codeTheme,
   onRunCode,
   onSendToPlayground,
+  onLegacyFileLinkClick,
 }: {
   message: ChatMessage;
   isLast?: boolean;
   codeTheme: CodeTheme;
   onRunCode: (language: string, value: string) => void;
   onSendToPlayground: (language: string, value: string) => void;
+  onLegacyFileLinkClick: (message: ChatMessage, link: UploadedMediaLink) => Promise<void>;
 }) {
   const isUser = message.role === "user";
 
@@ -2338,7 +2389,7 @@ function MessageBubble({
                 onClick={(event) => {
                   if (!link.url.startsWith("data:")) return;
                   event.preventDefault();
-                  openInlineDataFile(link.url, link.name);
+                  void onLegacyFileLinkClick(message, link);
                 }}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-secondary/60 hover:bg-secondary/80 text-xs text-muted-foreground hover:text-foreground transition-colors border border-border/30"
               >

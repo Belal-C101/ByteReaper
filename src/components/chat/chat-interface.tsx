@@ -53,6 +53,7 @@ import {
   getSessionMessages,
   getUserPromptTemplates,
   saveChatExchange,
+  updateSessionUserMessageLinks,
   saveUserPromptTemplate,
   renameChatSession,
   deleteChatSession,
@@ -404,6 +405,45 @@ function openInlineDataFile(dataUrl: string, fileName: string): void {
   }
 }
 
+function isDataUrl(url: string | undefined): boolean {
+  return typeof url === "string" && url.startsWith("data:");
+}
+
+async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
+  const arr = dataUrl.split(",");
+  const mimeMatch = arr[0].match(/:(.*?);/);
+  const mime = mimeMatch ? mimeMatch[1] : "application/octet-stream";
+  const binary = atob(arr[1]);
+  let n = binary.length;
+  const bytes = new Uint8Array(n);
+
+  while (n--) {
+    bytes[n] = binary.charCodeAt(n);
+  }
+
+  return new Blob([bytes], { type: mime });
+}
+
+async function uploadLegacyDataUrlLink(dataUrl: string, fileName: string): Promise<UploadedMediaLink | null> {
+  try {
+    const blob = await dataUrlToBlob(dataUrl);
+    const formData = new FormData();
+    formData.append("files", blob, fileName || "attachment");
+
+    const uploadRes = await fetch("/api/upload", { method: "POST", body: formData });
+    if (!uploadRes.ok) return null;
+
+    const uploadData = await uploadRes.json();
+    const normalizedImages = normalizeUploadedMediaLinks(uploadData.images);
+    const normalizedFiles = normalizeUploadedMediaLinks(uploadData.files);
+    const first = normalizedImages[0] || normalizedFiles[0];
+    return first || null;
+  } catch (error) {
+    console.error("Failed to migrate legacy data URL link:", error);
+    return null;
+  }
+}
+
 // ─── Model Selector ──────────────────────────────────────
 
 function ModelSelector({
@@ -535,6 +575,7 @@ export function ChatInterface() {
   const exportMenuRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dragCounterRef = useRef(0);
+  const migratingLegacySessionsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     let isMounted = true;
@@ -640,6 +681,61 @@ export function ChatInterface() {
       .finally(() => { if (isMounted) setIsMessagesLoading(false); });
     return () => { isMounted = false; };
   }, [sessionId, user?.uid, isDraftSessionId]);
+
+  useEffect(() => {
+    if (!user?.uid || !sessionId || isDraftSessionId(sessionId) || messages.length === 0) return;
+    if (migratingLegacySessionsRef.current.has(sessionId)) return;
+
+    const legacyUserMessages = messages.filter(
+      (message) =>
+        message.role === "user" &&
+        ((message.fileLinks && message.fileLinks.some((link) => isDataUrl(link.url))) ||
+          (message.imageLinks && message.imageLinks.some((link) => isDataUrl(link.url))))
+    );
+
+    if (legacyUserMessages.length === 0) return;
+
+    migratingLegacySessionsRef.current.add(sessionId);
+
+    void (async () => {
+      try {
+        for (const message of legacyUserMessages) {
+          const nextFileLinks: UploadedMediaLink[] = [];
+          const nextImageLinks: UploadedMediaLink[] = [];
+
+          for (const link of message.fileLinks || []) {
+            if (!isDataUrl(link.url)) {
+              nextFileLinks.push(link);
+              continue;
+            }
+            const migrated = await uploadLegacyDataUrlLink(link.url, link.name);
+            if (migrated) nextFileLinks.push(migrated);
+          }
+
+          for (const link of message.imageLinks || []) {
+            if (!isDataUrl(link.url)) {
+              nextImageLinks.push(link);
+              continue;
+            }
+            const migrated = await uploadLegacyDataUrlLink(link.url, link.name);
+            if (migrated) nextImageLinks.push(migrated);
+          }
+
+          await updateSessionUserMessageLinks(sessionId, user.uid, message.id, {
+            fileLinks: nextFileLinks,
+            imageLinks: nextImageLinks,
+          });
+        }
+
+        const refreshed = await getSessionMessages(sessionId, user.uid);
+        setMessages(refreshed);
+      } catch (migrationError) {
+        console.error("Failed migrating legacy message links:", migrationError);
+      } finally {
+        migratingLegacySessionsRef.current.delete(sessionId);
+      }
+    })();
+  }, [messages, sessionId, user?.uid, isDraftSessionId]);
 
   useEffect(() => {
     if (sessionId && !isDraftSessionId(sessionId)) return;

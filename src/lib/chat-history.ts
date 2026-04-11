@@ -514,6 +514,52 @@ export async function saveChatExchange(
   }
 }
 
+/** Update stored media links for one user message inside a chat session. */
+export async function updateSessionUserMessageLinks(
+  sessionId: string,
+  userId: string,
+  userMessageId: string,
+  links: {
+    imageLinks?: ChatMessage['imageLinks'];
+    fileLinks?: ChatMessage['fileLinks'];
+  }
+): Promise<void> {
+  try {
+    const sessionRef = doc(db, CHAT_SESSION_COLLECTION, sessionId);
+    const snapshot = await getDoc(sessionRef);
+
+    if (!snapshot.exists()) {
+      throw new Error('Chat session not found');
+    }
+
+    const data = snapshot.data();
+    if (data.userId !== userId) {
+      throw new Error('You do not have permission to update this chat session');
+    }
+
+    const existingMessages = Array.isArray(data.messages) ? [...data.messages] : [];
+    const index = existingMessages.findIndex((pair: any) => pair?.userMessageId === userMessageId);
+    if (index < 0) return;
+
+    const nextPair = { ...existingMessages[index] };
+    const normalizedImages = sanitizeMediaLinksForStorage(links.imageLinks);
+    const normalizedFiles = sanitizeMediaLinksForStorage(links.fileLinks);
+
+    nextPair.imageLinks = normalizedImages.length > 0 ? normalizedImages : null;
+    nextPair.fileLinks = normalizedFiles.length > 0 ? normalizedFiles : null;
+
+    existingMessages[index] = nextPair;
+
+    await updateDoc(sessionRef, {
+      messages: existingMessages,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error: any) {
+    console.error('Error updating session user message links:', error);
+    throw toReadableFirestoreError(error, 'Failed to update message links');
+  }
+}
+
 /** Rename a chat session by creating a new doc and deleting the old one. */
 export async function renameChatSession(sessionId: string, nextTitle: string, userId: string): Promise<string> {
   try {

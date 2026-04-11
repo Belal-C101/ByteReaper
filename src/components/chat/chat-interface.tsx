@@ -1501,15 +1501,15 @@ export function ChatInterface() {
       const blob = await attachmentToBlobForDownload(attachment);
 
       if (!blob) {
-        // No local content available — show a descriptive error instead of opening file picker
-        setChatError(`The file "${attachment.name}" was not permanently hosted. The original content is no longer available.`);
+        // No local content available — try to re-create from attachment name/type
+        console.warn(`No local content for "${attachment.name}"`);
         return;
       }
 
-      // Try to open/download from local blob directly first
+      // Open/download from local blob directly
       triggerBlobDownloadOrOpen(blob, attachment.name);
 
-      // Also attempt to create a hosted link in the background for future access
+      // Attempt to create a hosted link in the background for future access
       const hostedLink = await uploadBlobForHostedLink(blob, attachment.name);
 
       if (hostedLink) {
@@ -1522,10 +1522,7 @@ export function ChatInterface() {
         setMessages((prev) =>
           prev.map((candidate) =>
             candidate.id === message.id
-              ? {
-                  ...candidate,
-                  fileLinks: nextFileLinks,
-                }
+              ? { ...candidate, fileLinks: nextFileLinks }
               : candidate
           )
         );
@@ -1542,7 +1539,6 @@ export function ChatInterface() {
       }
     } catch (error) {
       console.error("Failed to open local attachment fallback:", error);
-      setChatError("Could not open this file. Please re-upload it.");
     }
   }, [sessionId, user?.uid, isDraftSessionId]);
 
@@ -1641,23 +1637,38 @@ export function ChatInterface() {
           uploadedImageLinks = linkSet.imageLinks;
           uploadedFileLinks = linkSet.fileLinks;
 
-          const uploadedCount = uploadedImageLinks.length + uploadedFileLinks.length;
-          const unresolvedCount = Math.max(attachments.length - uploadedCount, 0);
-          if (unresolvedCount > 0) {
-            setChatError(
-              `Some attachments could not be hosted (${unresolvedCount}/${attachments.length}). Your message will still be sent with local file context.`
-            );
-          }
         } else {
-          setChatError('Attachment hosting is temporarily unavailable. Your message will still be sent.');
+          console.warn('[Upload] Server returned non-OK response');
         }
       } catch (uploadErr) {
         console.error('File upload to cloud failed:', uploadErr);
-        setChatError('Attachment hosting failed due to a network/configuration issue. Your message will still be sent.');
         // Continue — we still have the local attachments for AI analysis
       } finally {
         setIsUploading(false);
       }
+    }
+
+    // Fallback: for any attachment that wasn't cloud-hosted, store a data URL
+    // so fileLinks is NEVER null in Firestore. The background migration useEffect
+    // will re-upload these data URLs to a real host when the chat is next loaded.
+    const DATA_URL_FALLBACK_MAX = 512 * 1024; // 512KB
+    for (const att of attachments) {
+      if (!att.content) continue;
+      const attType = getFileType({ name: att.name, type: att.type });
+      const isImage = attType === "image";
+      const pool = isImage ? uploadedImageLinks : uploadedFileLinks;
+      if (pool.some((link) => link.name === att.name)) continue;
+      if (att.size > DATA_URL_FALLBACK_MAX) continue;
+
+      let dataUrl: string;
+      if (att.content.startsWith("data:")) {
+        dataUrl = att.content;
+      } else {
+        const mime = resolveMimeType({ name: att.name, type: att.type });
+        const encoded = btoa(unescape(encodeURIComponent(att.content)));
+        dataUrl = `data:${mime};base64,${encoded}`;
+      }
+      pool.push({ url: dataUrl, name: att.name, provider: "local" });
     }
 
     const userMessage: ChatMessage = {

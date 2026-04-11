@@ -19,6 +19,8 @@ import { ChatMessage } from '@/types/chat';
 
 const CHAT_SESSION_COLLECTION = 'chat_session';
 const ARCHIVED_CHATS_COLLECTION = 'archived_chats';
+const SHARED_CHATS_COLLECTION = 'shared_chats';
+const USER_PROMPT_TEMPLATES_COLLECTION = 'user_prompt_templates';
 
 /** Lightweight attachment metadata stored in Firestore (no binary content). */
 export interface StoredAttachment {
@@ -61,6 +63,30 @@ export interface ChatSession {
   isDraft?: boolean;
 }
 
+export interface SharedChat {
+  id: string;
+  title: string;
+  ownerId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  messages: ChatMessage[];
+}
+
+interface SharedChatMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: Timestamp | Date | string;
+  searchResults?: ChatMessage['searchResults'] | null;
+  error?: string | null;
+}
+
+interface PromptTemplateDocument {
+  userId: string;
+  templates: string[];
+  createdAt?: Timestamp | Date | string;
+  updatedAt?: Timestamp | Date | string;
+}
+
 // ─── Helpers ───────────────────────────────────────────────
 
 /**
@@ -99,6 +125,38 @@ function normalizeChatName(rawTitle: string): string {
   }
 
   return normalized;
+}
+
+function sanitizePromptTemplates(values: string[]): string[] {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0)
+    )
+  ).slice(0, 20);
+}
+
+function serializeSharedMessage(message: ChatMessage): SharedChatMessage {
+  return {
+    role: message.role,
+    content: message.content,
+    timestamp: Timestamp.fromDate(message.timestamp),
+    searchResults: message.searchResults ?? null,
+    error: message.error ?? null,
+  };
+}
+
+function deserializeSharedMessage(message: SharedChatMessage, idSeed: string, index: number): ChatMessage {
+  return {
+    id: `${idSeed}-${index}`,
+    role: message.role,
+    content: message.content,
+    timestamp: parseFirestoreDate(message.timestamp),
+    searchResults: message.searchResults ?? undefined,
+    error: message.error ?? undefined,
+    isStreaming: false,
+  };
 }
 
 function toReadableFirestoreError(error: any, fallback: string): Error {
@@ -592,5 +650,96 @@ export async function deleteChatSession(sessionId: string, userId?: string): Pro
   } catch (error: any) {
     console.error('Error deleting chat session:', error);
     throw toReadableFirestoreError(error, 'Failed to delete chat session');
+  }
+}
+
+/** Create a publicly shareable snapshot of the current chat messages. */
+export async function createSharedChat(
+  userId: string,
+  title: string,
+  messages: ChatMessage[]
+): Promise<string> {
+  try {
+    const sharedRef = doc(collection(db, SHARED_CHATS_COLLECTION));
+    const serializedMessages = messages
+      .filter((message) => typeof message.content === 'string' && message.content.trim().length > 0)
+      .map((message) => serializeSharedMessage(message));
+
+    await setDoc(sharedRef, {
+      ownerId: userId,
+      title: normalizeChatName(title),
+      isPublic: true,
+      messages: serializedMessages,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    return sharedRef.id;
+  } catch (error: any) {
+    console.error('Error creating shared chat:', error);
+    throw toReadableFirestoreError(error, 'Failed to create shared chat link');
+  }
+}
+
+/** Fetch a shared chat snapshot. This can be called without authentication. */
+export async function getSharedChat(shareId: string): Promise<SharedChat | null> {
+  try {
+    const snapshot = await getDoc(doc(db, SHARED_CHATS_COLLECTION, shareId));
+    if (!snapshot.exists()) return null;
+
+    const data = snapshot.data();
+    if (data.isPublic !== true) return null;
+
+    const storedMessages = Array.isArray(data.messages) ? (data.messages as SharedChatMessage[]) : [];
+
+    return {
+      id: snapshot.id,
+      title: typeof data.title === 'string' ? data.title : 'Shared chat',
+      ownerId: typeof data.ownerId === 'string' ? data.ownerId : undefined,
+      createdAt: parseFirestoreDate(data.createdAt),
+      updatedAt: parseFirestoreDate(data.updatedAt ?? data.createdAt),
+      messages: storedMessages.map((message, index) => deserializeSharedMessage(message, snapshot.id, index)),
+    };
+  } catch (error: any) {
+    console.error('Error loading shared chat:', error);
+    return null;
+  }
+}
+
+/** Load user-defined prompt templates from Firestore. */
+export async function getUserPromptTemplates(userId: string): Promise<string[]> {
+  try {
+    const snapshot = await getDoc(doc(db, USER_PROMPT_TEMPLATES_COLLECTION, userId));
+    if (!snapshot.exists()) return [];
+
+    const data = snapshot.data() as PromptTemplateDocument;
+    const templates = Array.isArray(data.templates)
+      ? data.templates.filter((item) => typeof item === 'string')
+      : [];
+
+    return sanitizePromptTemplates(templates);
+  } catch (error: any) {
+    console.error('Error getting prompt templates:', error);
+    return [];
+  }
+}
+
+/** Save a custom prompt template and return the updated template list. */
+export async function saveUserPromptTemplate(userId: string, template: string): Promise<string[]> {
+  try {
+    const current = await getUserPromptTemplates(userId);
+    const next = sanitizePromptTemplates([template, ...current]);
+
+    await setDoc(doc(db, USER_PROMPT_TEMPLATES_COLLECTION, userId), {
+      userId,
+      templates: next,
+      updatedAt: serverTimestamp(),
+      createdAt: serverTimestamp(),
+    });
+
+    return next;
+  } catch (error: any) {
+    console.error('Error saving prompt template:', error);
+    throw toReadableFirestoreError(error, 'Failed to save prompt template');
   }
 }

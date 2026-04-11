@@ -87,5 +87,31 @@ service cloud.firestore {
       allow delete: if isAuthenticated() &&
                        resource.data.userId == request.auth.uid;
     }
+
+    // ─── Shared Chats (public read via share links) ───────
+
+    match /shared_chats/{shareId} {
+      allow read: if resource.data.isPublic == true ||
+                     (isAuthenticated() && resource.data.ownerId == request.auth.uid);
+
+      allow create: if isAuthenticated() &&
+                       request.resource.data.ownerId == request.auth.uid &&
+                       request.resource.data.title is string &&
+                       request.resource.data.messages is list &&
+                       request.resource.data.isPublic == true;
+
+      allow update, delete: if isAuthenticated() &&
+                              resource.data.ownerId == request.auth.uid;
+    }
+
+    // ─── User Prompt Templates ────────────────────────────
+
+    match /user_prompt_templates/{userId} {
+      allow read, delete: if isOwner(userId);
+
+      allow create, update: if isOwner(userId) &&
+                               request.resource.data.userId == request.auth.uid &&
+                               request.resource.data.templates is list;
+    }
   }
 }

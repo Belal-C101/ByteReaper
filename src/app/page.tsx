@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { AuthWall } from "@/components/landing/auth-wall";
+import { DeveloperToolsSection } from "@/components/landing/developer-tools";
 
 export default function HomePage() {
   const router = useRouter();
@@ -32,5 +33,10 @@ export default function HomePage() {
     );
   }
 
-  return <AuthWall />;
+  return (
+    <>
+      <AuthWall />
+      <DeveloperToolsSection />
+    </>
+  );
 }

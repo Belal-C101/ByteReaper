@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
   Send,
   Paperclip,
@@ -43,11 +43,14 @@ import { ChatMessage, FileAttachment, UploadedMediaLink } from "@/types/chat";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   ChatSession,
+  createSharedChat,
   createChatSession,
   getChatSessions,
   getArchivedChatSessions,
   getSessionMessages,
+  getUserPromptTemplates,
   saveChatExchange,
+  saveUserPromptTemplate,
   renameChatSession,
   deleteChatSession,
   archiveChatSession,
@@ -55,7 +58,7 @@ import {
 } from "@/lib/chat-history";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { oneDark, oneLight, okaidia } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 const MAX_ATTACHMENT_SIZE_BYTES = 900 * 1024;
 const DRAFT_CHAT_ID_PREFIX = "draft-chat-";
@@ -65,6 +68,28 @@ const EMPTY_STATE_PROMPTS = [
   "Explain this TypeScript error",
   "Compare Prisma vs Drizzle for Next.js",
 ];
+
+const SLASH_COMMANDS = [
+  { command: "search", description: "Search the web", usage: "/search <query>" },
+  { command: "analyze", description: "Analyze a GitHub repository", usage: "/analyze <github-url>" },
+  { command: "translate", description: "Translate code", usage: "/translate <source> <target> <code>" },
+  { command: "review", description: "Review the latest code block", usage: "/review" },
+  { command: "commit", description: "Generate commit message", usage: "/commit" },
+  { command: "explain", description: "Explain latest code block", usage: "/explain" },
+  { command: "simplify", description: "Simplify latest code block", usage: "/simplify" },
+];
+
+const BUILT_IN_PROMPT_TEMPLATES = [
+  "Review this code for bugs and security issues",
+  "Explain this code step by step",
+  "Optimize this code for performance",
+  "Write unit tests for this code",
+  "Convert this to TypeScript",
+  "Add error handling to this code",
+  "Document this code with JSDoc comments",
+];
+
+type CodeTheme = "oneDark" | "oneLight" | "okaidia";
 
 const generateId = () => Math.random().toString(36).substring(2, 15);
 
@@ -252,6 +277,7 @@ function ModelSelector({
           </>
         )}
       </AnimatePresence>
+
     </div>
   );
 }
@@ -303,12 +329,46 @@ export function ChatInterface() {
   const [featureCodeReview, setFeatureCodeReview] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [promptTemplates, setPromptTemplates] = useState<string[]>([]);
+  const [promptMenuOpen, setPromptMenuOpen] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [codeTheme, setCodeTheme] = useState<CodeTheme>("oneDark");
+  const [runnerDoc, setRunnerDoc] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const featuresMenuRef = useRef<HTMLDivElement>(null);
+  const promptMenuRef = useRef<HTMLDivElement>(null);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dragCounterRef = useRef(0);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    if (!user) {
+      setPromptTemplates([]);
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    getUserPromptTemplates(user.uid)
+      .then((templates) => {
+        if (isMounted) {
+          setPromptTemplates(templates);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setPromptTemplates([]);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user]);
 
   const createSessionWithRetry = useCallback(async (title: string): Promise<string> => {
     if (!user) throw new Error("You must be logged in to create a chat session.");
@@ -421,6 +481,27 @@ export function ChatInterface() {
       document.removeEventListener("touchstart", handleOutsidePointer);
     };
   }, [featuresMenuOpen]);
+
+  useEffect(() => {
+    if (!promptMenuOpen && !exportMenuOpen) return;
+
+    const handleOutsidePointer = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (promptMenuRef.current?.contains(target)) return;
+      if (exportMenuRef.current?.contains(target)) return;
+      setPromptMenuOpen(false);
+      setExportMenuOpen(false);
+    };
+
+    document.addEventListener("mousedown", handleOutsidePointer);
+    document.addEventListener("touchstart", handleOutsidePointer);
+
+    return () => {
+      document.removeEventListener("mousedown", handleOutsidePointer);
+      document.removeEventListener("touchstart", handleOutsidePointer);
+    };
+  }, [promptMenuOpen, exportMenuOpen]);
 
   const handleCreateNewChat = useCallback(async () => {
     if (!user || isLoading) return;
@@ -566,6 +647,212 @@ export function ChatInterface() {
     }
   }, [handleFileUpload]);
 
+  const slashQuery = useMemo(() => {
+    const trimmed = input.trimStart();
+    if (!trimmed.startsWith("/")) return "";
+    return trimmed.slice(1).toLowerCase();
+  }, [input]);
+
+  const slashSuggestions = useMemo(() => {
+    if (!slashQuery) return SLASH_COMMANDS;
+    return SLASH_COMMANDS.filter((item) => item.command.includes(slashQuery));
+  }, [slashQuery]);
+
+  const extractLastCodeBlock = useCallback(() => {
+    const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
+
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const message = messages[i];
+      if (!message?.content) continue;
+
+      const matches = Array.from(message.content.matchAll(codeBlockRegex));
+      if (matches.length > 0) {
+        const latest = matches[matches.length - 1];
+        return {
+          language: (latest[1] || "text").toLowerCase(),
+          code: latest[2] || "",
+        };
+      }
+    }
+
+    return null;
+  }, [messages]);
+
+  const resolveSlashPrompt = useCallback((rawInput: string) => {
+    if (!rawInput.trim().startsWith("/")) {
+      return {
+        prompt: rawInput,
+        useWebSearch: false,
+        translateTarget: undefined as string | undefined,
+      };
+    }
+
+    const [commandRaw, ...args] = rawInput.trim().slice(1).split(/\s+/);
+    const command = commandRaw.toLowerCase();
+    const joinedArgs = args.join(" ").trim();
+
+    if (command === "search") {
+      return {
+        prompt: `Search the web and provide a concise answer with sources for: ${joinedArgs}`,
+        useWebSearch: true,
+        translateTarget: undefined,
+      };
+    }
+
+    if (command === "analyze") {
+      return {
+        prompt: `Analyze this GitHub repository in depth and report architecture, risks, and recommendations: ${joinedArgs}`,
+        useWebSearch: false,
+        translateTarget: undefined,
+      };
+    }
+
+    if (command === "translate") {
+      const [source = "", target = "", ...rest] = args;
+      const providedCode = rest.join(" ").trim();
+      const fallback = extractLastCodeBlock();
+      const codeToUse = providedCode || fallback?.code || "";
+      if (!source || !target || !codeToUse) {
+        return { error: "Usage: /translate <source> <target> <code> or include a recent code block." };
+      }
+      return {
+        prompt: `Translate this ${source} code to ${target}. Keep behavior equivalent and preserve readability:\n\n${codeToUse}`,
+        useWebSearch: false,
+        translateTarget: target,
+      };
+    }
+
+    if (["review", "commit", "explain", "simplify"].includes(command)) {
+      const fallback = extractLastCodeBlock();
+      if (!fallback?.code) {
+        return { error: `/${command} needs a code block in recent chat history.` };
+      }
+
+      const prompts: Record<string, string> = {
+        review: "Review this code for bugs, security issues, and performance problems:",
+        commit: "Generate a concise commit message for this code change:",
+        explain: "Explain this code step by step:",
+        simplify: "Refactor this code to be simpler while preserving behavior:",
+      };
+
+      return {
+        prompt: `${prompts[command]}\n\n${fallback.code}`,
+        useWebSearch: false,
+        translateTarget: undefined,
+      };
+    }
+
+    return { error: `Unknown slash command: /${command}` };
+  }, [extractLastCodeBlock]);
+
+  const exportAsMarkdown = useCallback(() => {
+    const markdown = messages
+      .map((message) => `## ${message.role === "user" ? "User" : "Assistant"}\n\n${message.content}\n`)
+      .join("\n");
+
+    const blob = new Blob([markdown], { type: "text/markdown" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "chat-export.md";
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }, [messages]);
+
+  const exportAsJson = useCallback(() => {
+    const payload = messages.map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      timestamp: message.timestamp.toISOString(),
+    }));
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "chat-export.json";
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }, [messages]);
+
+  const exportAsPdf = useCallback(() => {
+    const html = messages
+      .map((message) => `<h3>${message.role === "user" ? "User" : "Assistant"}</h3><pre style=\"white-space:pre-wrap;font-family:system-ui\">${message.content.replace(/</g, "&lt;")}</pre>`)
+      .join("<hr />");
+
+    const popup = window.open("", "_blank", "width=960,height=720");
+    if (!popup) return;
+    popup.document.write(`<html><head><title>Chat Export</title></head><body>${html}</body></html>`);
+    popup.document.close();
+    popup.focus();
+    popup.print();
+  }, [messages]);
+
+  const saveCustomTemplate = useCallback(async () => {
+    if (!user) {
+      setChatError("Please sign in to save custom templates.");
+      return;
+    }
+
+    const trimmed = input.trim();
+    if (!trimmed) return;
+
+    try {
+      const next = await saveUserPromptTemplate(user.uid, trimmed);
+      setPromptTemplates(next);
+    } catch (error) {
+      setChatError(getErrorMessage(error, "Could not save the template."));
+    }
+  }, [input, user]);
+
+  const shareCurrentChat = useCallback(async () => {
+    if (!user) {
+      setChatError("Please sign in to share a chat.");
+      return;
+    }
+    if (messages.length === 0) {
+      setChatError("There is no chat content to share yet.");
+      return;
+    }
+
+    try {
+      const sessionTitle =
+        sessions.find((session) => session.id === sessionId)?.title ||
+        archivedSessions.find((session) => session.id === sessionId)?.title ||
+        "Shared Chat";
+
+      const shareId = await createSharedChat(user.uid, sessionTitle, messages);
+      const shareUrl = `${window.location.origin}/shared-chat/${shareId}`;
+      await navigator.clipboard.writeText(shareUrl);
+      window.open(shareUrl, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      setChatError(getErrorMessage(error, "Unable to create a share link."));
+    }
+  }, [archivedSessions, messages, sessionId, sessions, user]);
+
+  const sendCodeToPlayground = useCallback((language: string, value: string) => {
+    const normalized = language.toLowerCase();
+    const state = {
+      html: normalized === "html" ? value : "<main id=\"app\"></main>",
+      css: "",
+      js: normalized === "javascript" || normalized === "js" || normalized === "typescript" || normalized === "ts" ? value : "",
+    };
+
+    const hash = btoa(unescape(encodeURIComponent(JSON.stringify(state))));
+    window.open(`/tools/playground#${hash}`, "_blank");
+  }, []);
+
+  const openRunner = useCallback((language: string, value: string) => {
+    const normalized = language.toLowerCase();
+    if (!["javascript", "js", "typescript", "ts", "html"].includes(normalized)) return;
+
+    const runnerHtml =
+      normalized === "html"
+        ? value
+        : `<!doctype html><html><body><pre id=\"out\"></pre><script>\nconst print=(...args)=>{document.getElementById('out').textContent += args.map(String).join(' ') + '\\n'};\nconsole.log=print;\ntry{\n${value}\n}catch(e){print('Error:', e?.message || e);}\n<\/script></body></html>`;
+
+    setRunnerDoc(runnerHtml);
+  }, []);
+
   const sendMessage = async () => {
     if ((!input.trim() && attachments.length === 0) || isLoading || !user) return;
     if (sessionId && archivedSessions.some((s) => s.id === sessionId)) {
@@ -575,7 +862,14 @@ export function ChatInterface() {
     setChatError(null);
 
     const trimmedInput = input.trim();
-    const normalizedPrompt = trimmedInput || (attachments.length > 0 ? "Please analyze the attached file(s)." : "");
+    const slashResolved = resolveSlashPrompt(trimmedInput);
+    if ("error" in slashResolved) {
+      setChatError(slashResolved.error || "Invalid slash command");
+      return;
+    }
+
+    const normalizedPrompt =
+      slashResolved.prompt.trim() || (attachments.length > 0 ? "Please analyze the attached file(s)." : "");
     const historyForModel = messages.slice(-10);
     let modelUsedForExchange = selectedModel;
     const needsNewSession = !sessionId || isDraftSessionId(sessionId);
@@ -663,11 +957,11 @@ export function ChatInterface() {
           history: historyForModel,
           model: selectedModel,
           features: {
-            webSearch: featureWebSearch,
+            webSearch: featureWebSearch || slashResolved.useWebSearch,
             thinking: featureThinking,
             studyMode: featureStudyMode,
             summarize: featureSummarize,
-            translate: featureTranslate ? featureTranslateLanguage : undefined,
+            translate: slashResolved.translateTarget || (featureTranslate ? featureTranslateLanguage : undefined),
             codeReview: featureCodeReview,
           },
         }),
@@ -1098,7 +1392,14 @@ export function ChatInterface() {
               <EmptyChatState friendlyName={friendlyName} onSelectPrompt={handleQuickPromptSelect} />
             ) : (
               messages.map((message, idx) => (
-                <MessageBubble key={message.id} message={message} isLast={idx === messages.length - 1} />
+                <MessageBubble
+                  key={message.id}
+                  message={message}
+                  isLast={idx === messages.length - 1}
+                  codeTheme={codeTheme}
+                  onRunCode={openRunner}
+                  onSendToPlayground={sendCodeToPlayground}
+                />
               ))
             )}
             <div ref={messagesEndRef} />
@@ -1170,6 +1471,34 @@ export function ChatInterface() {
               </AnimatePresence>
 
               {/* Input area */}
+              <AnimatePresence>
+                {input.trimStart().startsWith("/") && slashSuggestions.length > 0 && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 6 }}
+                    className="px-3 pt-3"
+                  >
+                    <div className="rounded-xl border border-border/50 bg-background/80 max-h-[180px] overflow-auto">
+                      {slashSuggestions.map((item) => (
+                        <button
+                          key={item.command}
+                          type="button"
+                          onClick={() => {
+                            setInput(`/${item.command} `);
+                            textareaRef.current?.focus();
+                          }}
+                          className="w-full text-left px-3 py-2 hover:bg-accent/50 border-b border-border/30 last:border-b-0"
+                        >
+                          <p className="text-sm font-mono">/{item.command}</p>
+                          <p className="text-xs text-muted-foreground">{item.description} · {item.usage}</p>
+                        </button>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
               <div className="flex items-end gap-2 p-3">
                 <input
                   ref={fileInputRef}
@@ -1301,6 +1630,54 @@ export function ChatInterface() {
                   </AnimatePresence>
                 </div>
 
+                <div ref={promptMenuRef} className="relative">
+                  <button
+                    onClick={() => setPromptMenuOpen((prev) => !prev)}
+                    disabled={isLoading}
+                    className="p-2 rounded-lg text-muted-foreground/60 hover:text-foreground hover:bg-accent/50 transition-all duration-150 disabled:opacity-40"
+                    title="Prompt templates"
+                  >
+                    <BookOpen className="h-4.5 w-4.5" />
+                  </button>
+
+                  <AnimatePresence>
+                    {promptMenuOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.95, y: 8 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.95, y: 8 }}
+                        className="absolute bottom-full left-0 mb-2 w-[300px] max-h-[280px] overflow-auto rounded-xl border border-border/50 bg-popover p-2 shadow-xl z-50"
+                      >
+                        <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Prompt templates</p>
+                        {[...BUILT_IN_PROMPT_TEMPLATES, ...promptTemplates].map((template, index) => (
+                          <button
+                            key={`${template}-${index}`}
+                            type="button"
+                            className="w-full text-left rounded-md px-2 py-2 hover:bg-accent/60 text-xs"
+                            onClick={() => {
+                              setInput(template);
+                              setPromptMenuOpen(false);
+                              textareaRef.current?.focus();
+                            }}
+                          >
+                            {template}
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          className="mt-1 w-full rounded-md border px-2 py-1.5 text-xs hover:bg-accent"
+                          onClick={() => {
+                            void saveCustomTemplate();
+                            setPromptMenuOpen(false);
+                          }}
+                        >
+                          Save current input as template
+                        </button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   disabled={isLoading}
@@ -1336,6 +1713,40 @@ export function ChatInterface() {
                 >
                   {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 </button>
+
+                <div ref={exportMenuRef} className="relative">
+                  <button
+                    onClick={() => setExportMenuOpen((prev) => !prev)}
+                    disabled={isLoading || messages.length === 0}
+                    className="p-2 rounded-lg text-muted-foreground/60 hover:text-foreground hover:bg-accent/50 transition-all duration-150 disabled:opacity-40"
+                    title="Export chat"
+                  >
+                    <Download className="h-4.5 w-4.5" />
+                  </button>
+                  <AnimatePresence>
+                    {exportMenuOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.95, y: 8 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.95, y: 8 }}
+                        className="absolute bottom-full right-0 mb-2 w-[180px] rounded-xl border border-border/50 bg-popover p-2 shadow-xl z-50"
+                      >
+                        <button type="button" className="w-full text-left rounded-md px-2 py-2 hover:bg-accent/60 text-xs" onClick={() => { exportAsMarkdown(); setExportMenuOpen(false); }}>
+                          Export Markdown
+                        </button>
+                        <button type="button" className="w-full text-left rounded-md px-2 py-2 hover:bg-accent/60 text-xs" onClick={() => { exportAsJson(); setExportMenuOpen(false); }}>
+                          Export JSON
+                        </button>
+                        <button type="button" className="w-full text-left rounded-md px-2 py-2 hover:bg-accent/60 text-xs" onClick={() => { exportAsPdf(); setExportMenuOpen(false); }}>
+                          Export PDF
+                        </button>
+                        <button type="button" className="w-full text-left rounded-md px-2 py-2 hover:bg-accent/60 text-xs" onClick={() => { void shareCurrentChat(); setExportMenuOpen(false); }}>
+                          Share Link
+                        </button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
               </div>
 
               {/* Bottom bar */}
@@ -1379,6 +1790,17 @@ export function ChatInterface() {
                 </div>
 
                 <div className="flex items-center gap-2">
+                  <select
+                    value={codeTheme}
+                    onChange={(e) => setCodeTheme(e.target.value as CodeTheme)}
+                    className="h-6 rounded-md border border-border/50 bg-background/70 px-1.5 text-[10px] text-muted-foreground"
+                    title="Code highlight theme"
+                  >
+                    <option value="oneDark">Theme: Dark</option>
+                    <option value="oneLight">Theme: Light</option>
+                    <option value="okaidia">Theme: Okaidia</option>
+                  </select>
+
                   {isUploading && (
                     <span className="text-[10px] text-primary/60 flex items-center gap-1">
                       <Loader2 className="h-3 w-3 animate-spin" /> Uploading...
@@ -1421,6 +1843,35 @@ export function ChatInterface() {
               >
                 <X className="h-4 w-4" />
               </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ─── Code Runner Modal ────────────────────── */}
+      <AnimatePresence>
+        {runnerDoc && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[95] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+            onClick={() => setRunnerDoc(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.96, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.96, opacity: 0 }}
+              className="w-full max-w-4xl bg-background border border-border/60 rounded-xl overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between px-3 py-2 border-b border-border/50">
+                <p className="text-sm font-medium">Code Runner (sandboxed iframe)</p>
+                <button onClick={() => setRunnerDoc(null)} className="p-1 rounded hover:bg-accent">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <iframe title="Code runner" sandbox="allow-scripts" srcDoc={runnerDoc} className="w-full h-[460px] bg-white" />
             </motion.div>
           </motion.div>
         )}
@@ -1486,7 +1937,19 @@ function EmptyChatState({
 
 // ─── Message Bubble ──────────────────────────────────────
 
-function MessageBubble({ message, isLast }: { message: ChatMessage; isLast?: boolean }) {
+function MessageBubble({
+  message,
+  isLast,
+  codeTheme,
+  onRunCode,
+  onSendToPlayground,
+}: {
+  message: ChatMessage;
+  isLast?: boolean;
+  codeTheme: CodeTheme;
+  onRunCode: (language: string, value: string) => void;
+  onSendToPlayground: (language: string, value: string) => void;
+}) {
   const isUser = message.role === "user";
 
   return (
@@ -1594,7 +2057,13 @@ function MessageBubble({ message, isLast }: { message: ChatMessage; isLast?: boo
                         {children}
                       </code>
                     ) : (
-                      <CodeBlock language={match[1]} value={String(children).replace(/\n$/, "")} />
+                      <CodeBlock
+                        language={match[1]}
+                        value={String(children).replace(/\n$/, "")}
+                        theme={codeTheme}
+                        onRun={onRunCode}
+                        onSendToPlayground={onSendToPlayground}
+                      />
                     );
                   },
                   a({ href, children }) {
@@ -1650,9 +2119,28 @@ function MessageBubble({ message, isLast }: { message: ChatMessage; isLast?: boo
   );
 }
 
-// ─── Code Block with Copy ────────────────────────────────
-function CodeBlock({ language, value }: { language: string; value: string }) {
+// ─── Code Block with Copy / Run / Playground ─────────────
+function CodeBlock({
+  language,
+  value,
+  theme,
+  onRun,
+  onSendToPlayground,
+}: {
+  language: string;
+  value: string;
+  theme: CodeTheme;
+  onRun: (language: string, value: string) => void;
+  onSendToPlayground: (language: string, value: string) => void;
+}) {
   const [copied, setCopied] = useState(false);
+  const normalizedLanguage = (language || "text").toLowerCase();
+  const canRun = ["javascript", "js", "typescript", "ts", "html"].includes(normalizedLanguage);
+  const styleMap = {
+    oneDark,
+    oneLight,
+    okaidia,
+  } as const;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(value);
@@ -1664,17 +2152,37 @@ function CodeBlock({ language, value }: { language: string; value: string }) {
     <div className="group relative my-4 overflow-hidden rounded-xl border border-border/20 bg-[#1e1e2e]">
       <div className="flex items-center justify-between px-4 py-1.5 bg-black/40 border-b border-white/10">
         <span className="text-xs font-mono text-zinc-400">{language || "text"}</span>
-        <button
-          onClick={handleCopy}
-          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-white/10 transition-colors"
-          title="Copy code"
-        >
-          {copied ? <Check className="h-3 w-3 text-green-400" /> : <Copy className="h-3 w-3" />}
-          {copied ? "Copied!" : "Copy"}
-        </button>
+        <div className="flex items-center gap-1">
+          {canRun && (
+            <button
+              onClick={() => onRun(normalizedLanguage, value)}
+              className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-white/10 transition-colors"
+              title="Run code"
+            >
+              <Zap className="h-3 w-3" />
+              Run
+            </button>
+          )}
+          <button
+            onClick={() => onSendToPlayground(normalizedLanguage, value)}
+            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-white/10 transition-colors"
+            title="Send to playground"
+          >
+            <ExternalLink className="h-3 w-3" />
+            Playground
+          </button>
+          <button
+            onClick={handleCopy}
+            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-white/10 transition-colors"
+            title="Copy code"
+          >
+            {copied ? <Check className="h-3 w-3 text-green-400" /> : <Copy className="h-3 w-3" />}
+            {copied ? "Copied!" : "Copy"}
+          </button>
+        </div>
       </div>
       <SyntaxHighlighter
-        style={oneDark}
+        style={styleMap[theme]}
         language={language || "text"}
         PreTag="div"
         className="!m-0 !rounded-none !bg-transparent !text-[13px]"

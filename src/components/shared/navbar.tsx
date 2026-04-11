@@ -5,12 +5,24 @@ import Link from "next/link";
 import Image from "next/image";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
-import { Moon, Sun, Github, MessageSquare, LogOut, User as UserIcon, ChevronDown } from "lucide-react";
+import {
+  Moon,
+  Sun,
+  Github,
+  MessageSquare,
+  LogOut,
+  User as UserIcon,
+  ChevronDown,
+  Wrench,
+  Menu,
+  X,
+} from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { signOut } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { ProfileModal } from "./profile-modal";
+import { TOOL_CATEGORIES, TOOLS } from "@/lib/tools/catalog";
 
 export function Navbar() {
   const { theme, setTheme } = useTheme();
@@ -18,6 +30,8 @@ export function Navbar() {
   const router = useRouter();
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const handleSignOut = async () => {
     try {
@@ -55,6 +69,62 @@ export function Navbar() {
 
           {/* Navigation */}
           <nav className="flex items-center gap-1">
+            <div className="relative hidden md:block">
+              <button
+                onClick={() => setToolsOpen(!toolsOpen)}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              >
+                <Wrench className="h-4 w-4" />
+                Tools
+                <ChevronDown className={`h-3 w-3 transition-transform ${toolsOpen ? "rotate-180" : ""}`} />
+              </button>
+
+              <AnimatePresence>
+                {toolsOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setToolsOpen(false)} />
+                    <motion.div
+                      initial={{ opacity: 0, y: -6, scale: 0.98 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -6, scale: 0.98 }}
+                      transition={{ duration: 0.15 }}
+                      className="absolute left-0 top-full mt-1.5 z-50 w-[720px] rounded-2xl border border-border/60 bg-popover/95 backdrop-blur-xl shadow-2xl p-5"
+                    >
+                      <div className="flex items-center justify-between mb-4">
+                        <p className="text-sm font-medium">Explore Developer Tools</p>
+                        <Button asChild size="sm" variant="outline">
+                          <Link href="/tools" onClick={() => setToolsOpen(false)}>
+                            Open Hub
+                          </Link>
+                        </Button>
+                      </div>
+                      <div className="grid grid-cols-3 gap-4">
+                        {TOOL_CATEGORIES.filter((category) => category !== "All").map((category) => (
+                          <div key={category} className="space-y-2">
+                            <p className="text-xs uppercase tracking-wide text-muted-foreground">{category}</p>
+                            <div className="space-y-1.5">
+                              {TOOLS.filter((tool) => tool.category === category)
+                                .slice(0, 3)
+                                .map((tool) => (
+                                  <Link
+                                    key={tool.slug}
+                                    href={`/tools/${tool.slug}`}
+                                    onClick={() => setToolsOpen(false)}
+                                    className="block rounded-md px-2 py-1.5 hover:bg-accent text-sm leading-tight"
+                                  >
+                                    {tool.title}
+                                  </Link>
+                                ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
+
             {user ? (
               <>
                 <Button asChild variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-foreground transition-colors">
@@ -181,8 +251,81 @@ export function Navbar() {
                 <Github className="h-4 w-4" aria-hidden="true" />
               </a>
             </Button>
+
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-muted-foreground hover:text-foreground md:hidden"
+              onClick={() => setMobileMenuOpen((prev) => !prev)}
+              aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
+            >
+              {mobileMenuOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
+            </Button>
           </nav>
         </div>
+
+        <AnimatePresence>
+          {mobileMenuOpen && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.15 }}
+              className="md:hidden border-t border-border/60 bg-background/95 backdrop-blur-xl"
+            >
+              <div className="px-4 py-3 space-y-1">
+                <Link
+                  href="/tools"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent"
+                >
+                  <Wrench className="h-4 w-4" />
+                  Tools Hub
+                </Link>
+
+                {user ? (
+                  <>
+                    <Link
+                      href="/analyze"
+                      onClick={() => setMobileMenuOpen(false)}
+                      className="flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent"
+                    >
+                      <MessageSquare className="h-4 w-4" />
+                      Chat
+                    </Link>
+                    <button
+                      onClick={() => {
+                        setMobileMenuOpen(false);
+                        handleSignOut();
+                      }}
+                      className="w-full text-left flex items-center gap-2 rounded-md px-3 py-2 text-sm text-destructive hover:bg-destructive/10"
+                    >
+                      <LogOut className="h-4 w-4" />
+                      Sign Out
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <Link
+                      href="/login"
+                      onClick={() => setMobileMenuOpen(false)}
+                      className="block rounded-md px-3 py-2 text-sm hover:bg-accent"
+                    >
+                      Login
+                    </Link>
+                    <Link
+                      href="/signup"
+                      onClick={() => setMobileMenuOpen(false)}
+                      className="block rounded-md px-3 py-2 text-sm hover:bg-accent"
+                    >
+                      Sign Up
+                    </Link>
+                  </>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </header>
 
       {/* Profile Modal */}

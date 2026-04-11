@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { signInWithGoogle } from "@/lib/auth";
+import { TOOL_COUNT } from "@/lib/tools/catalog";
 
 const CAPABILITIES = [
   {
@@ -122,15 +123,19 @@ export function AuthWall() {
             </motion.div>
 
             <h1 className="text-4xl md:text-[3.25rem] font-semibold tracking-tight leading-[1.1] mb-3">
-              Think fast,
+              AI code copilot
               <br />
-              build{" "}
-              <span className="text-gradient">smarter</span>
+              plus <span className="text-gradient">{TOOL_COUNT}+ free dev tools</span>
             </h1>
 
             <p className="text-muted-foreground text-base md:text-lg mb-8 leading-relaxed max-w-md">
-              Your AI-powered code analysis workspace. Chat, review, and ship with confidence.
+              Chat, analyze, and ship faster with ByteReaper's built-in toolbox for daily developer workflows.
             </p>
+
+            <div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/50 px-3 py-1.5 text-xs text-muted-foreground mb-5">
+              <Sparkles className="h-3.5 w-3.5 text-primary" />
+              <span>{TOOL_COUNT}+ Free Developer Tools</span>
+            </div>
 
             <Card className="p-5 md:p-6 bg-card/70 border-border/50 backdrop-blur-lg shadow-xl shadow-black/[0.03] dark:shadow-black/[0.15]">
               {error && (

@@ -310,29 +310,39 @@ function openInlineDataFile(dataUrl: string, fileName: string): void {
     }
 
     const blob = new Blob([bytes], { type: mime });
-    const objectUrl = URL.createObjectURL(blob);
-    const popup = window.open(objectUrl, "_blank", "noopener,noreferrer");
-
-    if (!popup) {
-      const anchor = document.createElement("a");
-      anchor.href = objectUrl;
-      anchor.download = fileName || "attachment";
-      anchor.click();
-    }
-
-    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    triggerBlobDownloadOrOpen(blob, fileName);
   } catch (error) {
     console.error("Failed to open inline fallback file:", error);
   }
 }
 
-function triggerFileOpenOrDownload(url: string, fileName: string): void {
+function triggerBlobDownloadOrOpen(blob: Blob, fileName: string): void {
+  const objectUrl = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
-  anchor.href = url;
+  anchor.href = objectUrl;
   anchor.download = fileName || "attachment";
-  anchor.target = "_self";
+  anchor.target = "_blank";
   anchor.rel = "noopener noreferrer";
+  document.body.appendChild(anchor);
   anchor.click();
+  document.body.removeChild(anchor);
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+}
+
+function triggerFileOpenOrDownload(url: string, fileName: string): void {
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = fileName || "attachment";
+    anchor.target = "_blank";
+    anchor.rel = "noopener noreferrer";
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+  } catch (error) {
+    console.error("Failed to trigger hosted file link:", error);
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
 }
 
 function isDataUrl(url: string | undefined): boolean {
@@ -352,6 +362,18 @@ async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
   }
 
   return new Blob([bytes], { type: mime });
+}
+
+async function attachmentToBlobForDownload(attachment: FileAttachment): Promise<Blob | null> {
+  if (!attachment.content) return null;
+
+  if (attachment.content.startsWith("data:")) {
+    return dataUrlToBlob(attachment.content);
+  }
+
+  return new Blob([attachment.content], {
+    type: resolveMimeType({ name: attachment.name, type: attachment.type }),
+  });
 }
 
 async function uploadLegacyDataUrlLink(dataUrl: string, fileName: string): Promise<UploadedMediaLink | null> {
@@ -1121,6 +1143,21 @@ export function ChatInterface() {
     triggerFileOpenOrDownload(migrated.url, migrated.name || link.name);
   }, [sessionId, user?.uid, isDraftSessionId]);
 
+  const handleAttachmentFallbackClick = useCallback(async (attachment: FileAttachment) => {
+    try {
+      const blob = await attachmentToBlobForDownload(attachment);
+      if (!blob) {
+        setChatError("This file does not have a hosted URL in history. Please re-upload it to get a permanent link.");
+        return;
+      }
+
+      triggerBlobDownloadOrOpen(blob, attachment.name);
+    } catch (error) {
+      console.error("Failed to open local attachment fallback:", error);
+      setChatError("Could not open this file. Please re-upload it.");
+    }
+  }, []);
+
   const openRunner = useCallback((language: string, value: string) => {
     const normalized = language.toLowerCase();
     if (!["javascript", "js", "typescript", "ts", "html"].includes(normalized)) return;
@@ -1706,6 +1743,7 @@ export function ChatInterface() {
                   onRunCode={openRunner}
                   onSendToPlayground={sendCodeToPlayground}
                   onLegacyFileLinkClick={handleLegacyFileLinkClick}
+                  onAttachmentFallbackClick={handleAttachmentFallbackClick}
                 />
               ))
             )}
@@ -2240,6 +2278,7 @@ function MessageBubble({
   onRunCode,
   onSendToPlayground,
   onLegacyFileLinkClick,
+  onAttachmentFallbackClick,
 }: {
   message: ChatMessage;
   isLast?: boolean;
@@ -2247,6 +2286,7 @@ function MessageBubble({
   onRunCode: (language: string, value: string) => void;
   onSendToPlayground: (language: string, value: string) => void;
   onLegacyFileLinkClick: (message: ChatMessage, link: UploadedMediaLink) => Promise<void>;
+  onAttachmentFallbackClick: (attachment: FileAttachment) => Promise<void>;
 }) {
   const isUser = message.role === "user";
 
@@ -2320,12 +2360,33 @@ function MessageBubble({
           !message.imageLinks?.length &&
           !message.fileLinks?.length && (
           <div className="flex flex-wrap gap-1.5 mb-2">
-            {message.attachments.map((attachment) => (
-              <span key={attachment.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-secondary/60 text-xs text-muted-foreground">
-                <FileIcon type={getFileType({ name: attachment.name, type: attachment.type })} />
-                {attachment.name}
-              </span>
-            ))}
+            {message.attachments.map((attachment) => {
+              const fileType = getFileType({ name: attachment.name, type: attachment.type });
+
+              if (fileType === "image") {
+                return (
+                  <span key={attachment.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-secondary/60 text-xs text-muted-foreground">
+                    <FileIcon type={fileType} />
+                    {attachment.name}
+                  </span>
+                );
+              }
+
+              return (
+                <button
+                  key={attachment.id}
+                  type="button"
+                  onClick={() => {
+                    void onAttachmentFallbackClick(attachment);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-secondary/60 hover:bg-secondary/80 text-xs text-muted-foreground hover:text-foreground transition-colors border border-border/30"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  <span className="max-w-[150px] truncate">{attachment.name}</span>
+                  <ExternalLink className="h-3 w-3 text-muted-foreground/40" />
+                </button>
+              );
+            })}
           </div>
         )}
 

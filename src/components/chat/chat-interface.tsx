@@ -413,6 +413,37 @@ function tryOpenInNewTab(url: string): boolean {
   }
 }
 
+function triggerAnchorNavigation(href: string, options?: { downloadName?: string; target?: "_blank" | "_self" }): boolean {
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = href;
+    anchor.rel = "noopener noreferrer";
+
+    if (options?.downloadName) {
+      anchor.download = options.downloadName;
+    }
+
+    if (options?.target) {
+      anchor.target = options.target;
+    }
+
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function buildFileProxyUrl(sourceUrl: string, fileName: string, disposition: "inline" | "attachment"): string {
+  const params = new URLSearchParams();
+  params.set("url", sourceUrl);
+  params.set("name", fileName || "attachment");
+  params.set("disposition", disposition);
+  return `/api/file-proxy?${params.toString()}`;
+}
+
 async function tryDownloadRemoteUrl(url: string, fileName: string): Promise<boolean> {
   try {
     const response = await fetch(url);
@@ -462,8 +493,15 @@ function triggerBlobDownloadOrOpen(blob: Blob, fileName: string): void {
 
 async function triggerFileOpenOrDownload(url: string, fileName: string): Promise<void> {
   const resolvedName = fileName || "attachment";
+  const previewable = isPreviewableInBrowser(resolvedName, undefined);
 
-  if (isPreviewableInBrowser(resolvedName, undefined)) {
+  if (!previewable) {
+    const proxyDownloadUrl = buildFileProxyUrl(url, resolvedName, "attachment");
+    const viaProxy = triggerAnchorNavigation(proxyDownloadUrl, { downloadName: resolvedName });
+    if (viaProxy) return;
+  }
+
+  if (previewable) {
     const opened = tryOpenInNewTab(url);
     if (opened) return;
   }
@@ -471,17 +509,22 @@ async function triggerFileOpenOrDownload(url: string, fileName: string): Promise
   const downloaded = await tryDownloadRemoteUrl(url, resolvedName);
   if (downloaded) return;
 
-  try {
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = resolvedName;
-    anchor.rel = "noopener noreferrer";
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-  } catch (error) {
-    console.error("Failed to trigger hosted file link:", error);
-    tryOpenInNewTab(url);
+  if (previewable) {
+    const proxyInlineUrl = buildFileProxyUrl(url, resolvedName, "inline");
+    const openedProxyInline = tryOpenInNewTab(proxyInlineUrl);
+    if (openedProxyInline) return;
+  } else {
+    const proxyDownloadUrl = buildFileProxyUrl(url, resolvedName, "attachment");
+    const viaProxy = triggerAnchorNavigation(proxyDownloadUrl, { downloadName: resolvedName });
+    if (viaProxy) return;
+  }
+
+  const directDownload = triggerAnchorNavigation(url, { downloadName: resolvedName });
+  if (directDownload) return;
+
+  const openedDirect = tryOpenInNewTab(url);
+  if (!openedDirect) {
+    console.error("Failed to trigger hosted file link:", { url, fileName: resolvedName });
   }
 }
 

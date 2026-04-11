@@ -113,5 +113,15 @@ service cloud.firestore {
                                request.resource.data.userId == request.auth.uid &&
                                request.resource.data.templates is list;
     }
+
+    // ─── User Tool Favorites ──────────────────────────────
+
+    match /user_tool_favorites/{userId} {
+      allow read, delete: if isOwner(userId);
+
+      allow create, update: if isOwner(userId) &&
+                               request.resource.data.userId == request.auth.uid &&
+                               request.resource.data.favorites is list;
+    }
   }
 }

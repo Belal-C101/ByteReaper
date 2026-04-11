@@ -1,43 +1,109 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Search, Star, Wrench } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { ToolIconGlyph } from "@/components/tools/tool-icon";
 import { TOOL_CATEGORIES, TOOL_COUNT, TOOLS } from "@/lib/tools/catalog";
+import { useAuth } from "@/contexts/AuthContext";
+import { getUserToolFavorites, saveUserToolFavorites } from "@/lib/tool-favorites";
 
 const TOOL_FAVORITES_STORAGE_KEY = "bytereaper_tool_favorites";
 const TOOL_TABS = ["Favorites", ...TOOL_CATEGORIES] as const;
 type ToolTab = (typeof TOOL_TABS)[number];
 
+function sanitizeFavoriteSlugs(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+
+  return Array.from(
+    new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0)
+    )
+  );
+}
+
 export default function ToolsHubPage() {
+  const { user } = useAuth();
   const [query, setQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState<ToolTab>("All");
   const [favorites, setFavorites] = useState<string[]>([]);
+
+  const persistLocalFavorites = useCallback((values: string[]) => {
+    window.localStorage.setItem(TOOL_FAVORITES_STORAGE_KEY, JSON.stringify(values));
+  }, []);
 
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(TOOL_FAVORITES_STORAGE_KEY);
       if (!raw) return;
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        const safeFavorites = parsed.filter((item): item is string => typeof item === "string");
-        setFavorites(safeFavorites);
-      }
+      setFavorites(sanitizeFavoriteSlugs(JSON.parse(raw)));
     } catch {
       setFavorites([]);
     }
   }, []);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    if (!user?.uid) return () => {
+      isMounted = false;
+    };
+
+    const syncFavorites = async () => {
+      try {
+        const localRaw = window.localStorage.getItem(TOOL_FAVORITES_STORAGE_KEY);
+        const localFavorites = localRaw ? sanitizeFavoriteSlugs(JSON.parse(localRaw)) : [];
+        const cloudFavorites = await getUserToolFavorites(user.uid);
+        if (!isMounted) return;
+
+        if (cloudFavorites.length > 0) {
+          setFavorites(cloudFavorites);
+          persistLocalFavorites(cloudFavorites);
+          return;
+        }
+
+        if (localFavorites.length > 0) {
+          const seeded = await saveUserToolFavorites(user.uid, localFavorites);
+          if (!isMounted) return;
+          setFavorites(seeded);
+          persistLocalFavorites(seeded);
+          return;
+        }
+
+        setFavorites([]);
+      } catch (error) {
+        console.error("Failed to sync tool favorites:", error);
+      }
+    };
+
+    void syncFavorites();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user?.uid, persistLocalFavorites]);
+
   const favoriteSet = useMemo(() => new Set(favorites), [favorites]);
 
   const toggleFavorite = (slug: string) => {
     setFavorites((prev) => {
-      const next = prev.includes(slug) ? prev.filter((value) => value !== slug) : [...prev, slug];
-      window.localStorage.setItem(TOOL_FAVORITES_STORAGE_KEY, JSON.stringify(next));
+      const next = prev.includes(slug)
+        ? prev.filter((value) => value !== slug)
+        : [...prev, slug];
+
+      persistLocalFavorites(next);
+      if (user?.uid) {
+        void saveUserToolFavorites(user.uid, next).catch((error) => {
+          console.error("Failed to save tool favorites:", error);
+        });
+      }
+
       return next;
     });
   };

@@ -38,10 +38,12 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTheme } from "next-themes";
+import { getDownloadURL, ref as storageRef, uploadBytes } from "firebase/storage";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ChatMessage, FileAttachment, UploadedMediaLink } from "@/types/chat";
 import { useAuth } from "@/contexts/AuthContext";
+import { storage } from "@/lib/firebase";
 import {
   ChatSession,
   createSharedChat,
@@ -231,28 +233,32 @@ function resolveMimeType(file: FileLike): string {
   return EXTENSION_MIME_MAP[ext] || "application/octet-stream";
 }
 
-function textToDataUrl(content: string, mimeType: string): string {
-  const bytes = new TextEncoder().encode(content);
-  let binary = "";
-
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte);
-  });
-
-  return `data:${mimeType};base64,${btoa(binary)}`;
+function sanitizeStorageFileName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
-function attachmentToDataUrl(attachment: FileAttachment): string | null {
-  if (attachment.preview) return attachment.preview;
+async function attachmentToBlob(attachment: FileAttachment): Promise<Blob | null> {
   if (!attachment.content) return null;
-  if (attachment.content.startsWith("data:")) return attachment.content;
 
-  try {
-    const mimeType = resolveMimeType({ name: attachment.name, type: attachment.type });
-    return textToDataUrl(attachment.content, mimeType);
-  } catch {
-    return null;
+  if (attachment.content.startsWith("data:")) {
+    try {
+      const arr = attachment.content.split(",");
+      const mimeMatch = arr[0].match(/:(.*?);/);
+      const mime = mimeMatch ? mimeMatch[1] : (attachment.type || "application/octet-stream");
+      const bstr = atob(arr[1]);
+      let n = bstr.length;
+      const u8arr = new Uint8Array(n);
+      while (n--) {
+        u8arr[n] = bstr.charCodeAt(n);
+      }
+      return new Blob([u8arr], { type: mime });
+    } catch {
+      const resp = await fetch(attachment.content);
+      return await resp.blob();
+    }
   }
+
+  return new Blob([attachment.content], { type: attachment.type || "text/plain" });
 }
 
 function normalizeUploadedMediaLinks(rawLinks: any[] | undefined): UploadedMediaLink[] {
@@ -271,12 +277,12 @@ function buildAttachmentMediaLinks(
   sourceAttachments: FileAttachment[],
   uploadedImages: UploadedMediaLink[],
   uploadedFiles: UploadedMediaLink[]
-): { imageLinks: UploadedMediaLink[]; fileLinks: UploadedMediaLink[]; fallbackCount: number; missingCount: number } {
+): { imageLinks: UploadedMediaLink[]; fileLinks: UploadedMediaLink[]; missingCount: number; unlinkedAttachments: FileAttachment[] } {
   const remainingImages = [...uploadedImages];
   const remainingFiles = [...uploadedFiles];
   const imageLinks: UploadedMediaLink[] = [];
   const fileLinks: UploadedMediaLink[] = [];
-  let fallbackCount = 0;
+  const unlinkedAttachments: FileAttachment[] = [];
   let missingCount = 0;
 
   sourceAttachments.forEach((attachment) => {
@@ -294,24 +300,60 @@ function buildAttachmentMediaLinks(
       return;
     }
 
-    const fallbackUrl = attachmentToDataUrl(attachment);
-    if (fallbackUrl) {
-      const fallbackLink: UploadedMediaLink = {
-        url: fallbackUrl,
-        name: attachment.name,
-        provider: "inline-data-url",
-      };
-
-      if (isImageAttachment) imageLinks.push(fallbackLink);
-      else fileLinks.push(fallbackLink);
-      fallbackCount += 1;
-      return;
-    }
-
+    unlinkedAttachments.push(attachment);
     missingCount += 1;
   });
 
-  return { imageLinks, fileLinks, fallbackCount, missingCount };
+  return { imageLinks, fileLinks, missingCount, unlinkedAttachments };
+}
+
+async function uploadAttachmentsToFirebaseStorage(
+  sourceAttachments: FileAttachment[],
+  userId: string
+): Promise<{ imageLinks: UploadedMediaLink[]; fileLinks: UploadedMediaLink[]; failedCount: number }> {
+  const imageLinks: UploadedMediaLink[] = [];
+  const fileLinks: UploadedMediaLink[] = [];
+  let failedCount = 0;
+
+  for (const attachment of sourceAttachments) {
+    try {
+      const blob = await attachmentToBlob(attachment);
+      if (!blob) {
+        failedCount += 1;
+        continue;
+      }
+
+      const safeName = sanitizeStorageFileName(attachment.name);
+      const timePrefix = Date.now();
+      const objectPath = `chat-uploads/${userId}/${timePrefix}-${generateId()}-${safeName}`;
+      const objectRef = storageRef(storage, objectPath);
+
+      await uploadBytes(objectRef, blob, {
+        contentType: resolveMimeType({ name: attachment.name, type: attachment.type }),
+        customMetadata: {
+          originalName: attachment.name,
+        },
+      });
+
+      const downloadUrl = await getDownloadURL(objectRef);
+      const link: UploadedMediaLink = {
+        url: downloadUrl,
+        name: attachment.name,
+        provider: "firebase-storage",
+      };
+
+      if (getFileType({ name: attachment.name, type: attachment.type }) === "image") {
+        imageLinks.push(link);
+      } else {
+        fileLinks.push(link);
+      }
+    } catch (error) {
+      console.error(`Failed Firebase Storage upload for ${attachment.name}:`, error);
+      failedCount += 1;
+    }
+  }
+
+  return { imageLinks, fileLinks, failedCount };
 }
 
 function getFileType(file: FileLike): "code" | "image" | "text" | "other" {
@@ -1072,29 +1114,40 @@ export function ChatInterface() {
           uploadedImageLinks = linkSet.imageLinks;
           uploadedFileLinks = linkSet.fileLinks;
 
-          const uploadedCount = normalizedImages.length + normalizedFiles.length;
-          if (linkSet.missingCount > 0) {
+          if (linkSet.unlinkedAttachments.length > 0) {
+            const firebaseFallback = await uploadAttachmentsToFirebaseStorage(linkSet.unlinkedAttachments, user.uid);
+            uploadedImageLinks = [...uploadedImageLinks, ...firebaseFallback.imageLinks];
+            uploadedFileLinks = [...uploadedFileLinks, ...firebaseFallback.fileLinks];
+          }
+
+          const uploadedCount = uploadedImageLinks.length + uploadedFileLinks.length;
+          const unresolvedCount = Math.max(attachments.length - uploadedCount, 0);
+          if (unresolvedCount > 0) {
             setChatError(
-              `Some attachments could not be linked (${linkSet.missingCount}/${attachments.length}). Try re-uploading those files.`
+              `Some attachments could not be linked (${unresolvedCount}/${attachments.length}). Try re-uploading those files.`
             );
           }
         } else {
           const linkSet = buildAttachmentMediaLinks(attachments, [], []);
-          uploadedImageLinks = linkSet.imageLinks;
-          uploadedFileLinks = linkSet.fileLinks;
-          if (linkSet.missingCount > 0) {
+          const firebaseFallback = await uploadAttachmentsToFirebaseStorage(linkSet.unlinkedAttachments, user.uid);
+          uploadedImageLinks = firebaseFallback.imageLinks;
+          uploadedFileLinks = firebaseFallback.fileLinks;
+          const unresolvedCount = Math.max(attachments.length - (uploadedImageLinks.length + uploadedFileLinks.length), 0);
+          if (unresolvedCount > 0) {
             setChatError(
-              `Upload failed and ${linkSet.missingCount} attachment(s) could not be linked.`
+              `Upload failed and ${unresolvedCount} attachment(s) could not be linked.`
             );
           }
         }
       } catch (uploadErr) {
         console.error('File upload to cloud failed:', uploadErr);
         const linkSet = buildAttachmentMediaLinks(attachments, [], []);
-        uploadedImageLinks = linkSet.imageLinks;
-        uploadedFileLinks = linkSet.fileLinks;
-        if (linkSet.missingCount > 0) {
-          setChatError(`Upload failed and ${linkSet.missingCount} attachment(s) could not be linked.`);
+        const firebaseFallback = await uploadAttachmentsToFirebaseStorage(linkSet.unlinkedAttachments, user.uid);
+        uploadedImageLinks = firebaseFallback.imageLinks;
+        uploadedFileLinks = firebaseFallback.fileLinks;
+        const unresolvedCount = Math.max(attachments.length - (uploadedImageLinks.length + uploadedFileLinks.length), 0);
+        if (unresolvedCount > 0) {
+          setChatError(`Upload failed and ${unresolvedCount} attachment(s) could not be linked.`);
         }
         // Continue — we still have the local attachments for AI analysis
       } finally {

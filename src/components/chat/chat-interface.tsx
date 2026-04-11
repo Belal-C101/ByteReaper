@@ -194,9 +194,45 @@ const AI_MODELS = {
 type ModelKey = keyof typeof AI_MODELS;
 type FileLike = { name: string; type?: string | null };
 
+const EXTENSION_MIME_MAP: Record<string, string> = {
+  md: "text/markdown",
+  markdown: "text/markdown",
+  txt: "text/plain",
+  json: "application/json",
+  js: "text/javascript",
+  jsx: "text/javascript",
+  ts: "text/typescript",
+  tsx: "text/typescript",
+  py: "text/x-python",
+  java: "text/x-java-source",
+  c: "text/x-c",
+  cpp: "text/x-c++src",
+  h: "text/x-c",
+  css: "text/css",
+  html: "text/html",
+  yml: "application/x-yaml",
+  yaml: "application/x-yaml",
+  sql: "application/sql",
+  sh: "application/x-sh",
+  bash: "application/x-sh",
+  go: "text/x-go",
+  rs: "text/rust",
+  rb: "text/x-ruby",
+  php: "application/x-httpd-php",
+};
+
+function resolveMimeType(file: FileLike): string {
+  if (typeof file.type === "string" && file.type.trim().length > 0) {
+    return file.type;
+  }
+
+  const ext = file.name.split(".").pop()?.toLowerCase() || "";
+  return EXTENSION_MIME_MAP[ext] || "application/octet-stream";
+}
+
 function getFileType(file: FileLike): "code" | "image" | "text" | "other" {
   const ext = file.name.split(".").pop()?.toLowerCase() || "";
-  const mimeType = file.type ?? "";
+  const mimeType = resolveMimeType(file);
   const codeExts = ["js", "ts", "jsx", "tsx", "py", "java", "cpp", "c", "h", "css", "html", "json", "md", "yaml", "yml", "sql", "sh", "bash", "go", "rs", "rb", "php"];
   const imageExts = ["jpg", "jpeg", "png", "gif", "webp", "svg"];
   if (codeExts.includes(ext)) return "code";
@@ -597,7 +633,7 @@ export function ChatInterface() {
         }
         newAttachments.push({
           id: generateId(), name: file.name,
-          type: file.type || `application/${file.name.split(".").pop()}`,
+          type: resolveMimeType(file),
           size: file.size, content, preview,
         });
       } catch (fileError) {
@@ -919,6 +955,13 @@ export function ChatInterface() {
           }
           if (uploadData.files) {
             uploadedFileLinks = uploadData.files.map((f: any) => ({ url: f.url, name: f.name, provider: f.provider }));
+          }
+
+          const uploadedCount = (uploadedImageLinks.length || 0) + (uploadedFileLinks.length || 0);
+          if (uploadedCount < attachments.length) {
+            setChatError(
+              `Uploaded ${uploadedCount}/${attachments.length} attachment(s). Some file links may be missing.`
+            );
           }
         }
       } catch (uploadErr) {

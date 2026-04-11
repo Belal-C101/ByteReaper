@@ -119,6 +119,16 @@ export function Navbar() {
                           </div>
                         ))}
                       </div>
+
+                      <div className="mt-4 pt-3 border-t border-border/50">
+                        <Link
+                          href="/tools"
+                          onClick={() => setToolsOpen(false)}
+                          className="block w-full rounded-lg border border-border/60 px-3 py-2 text-sm font-medium text-center hover:bg-accent transition-colors"
+                        >
+                          Explore more tools
+                        </Link>
+                      </div>
                     </motion.div>
                   </>
                 )}

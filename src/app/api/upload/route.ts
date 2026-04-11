@@ -6,6 +6,42 @@ export const maxDuration = 30;
 // Max 10MB per file
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
+const EXTENSION_MIME_MAP: Record<string, string> = {
+  md: 'text/markdown',
+  markdown: 'text/markdown',
+  txt: 'text/plain',
+  json: 'application/json',
+  js: 'text/javascript',
+  jsx: 'text/javascript',
+  ts: 'text/typescript',
+  tsx: 'text/typescript',
+  py: 'text/x-python',
+  java: 'text/x-java-source',
+  c: 'text/x-c',
+  cpp: 'text/x-c++src',
+  h: 'text/x-c',
+  css: 'text/css',
+  html: 'text/html',
+  yml: 'application/x-yaml',
+  yaml: 'application/x-yaml',
+  sql: 'application/sql',
+  sh: 'application/x-sh',
+  bash: 'application/x-sh',
+  go: 'text/x-go',
+  rs: 'text/rust',
+  rb: 'text/x-ruby',
+  php: 'application/x-httpd-php',
+};
+
+function normalizeMimeType(file: File): string {
+  if (typeof file.type === 'string' && file.type.trim().length > 0) {
+    return file.type;
+  }
+
+  const ext = file.name.split('.').pop()?.toLowerCase() || '';
+  return EXTENSION_MIME_MAP[ext] || 'application/octet-stream';
+}
+
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
@@ -30,7 +66,7 @@ export async function POST(request: NextRequest) {
       filesToUpload.push({
         buffer: Buffer.from(arrayBuffer),
         name: file.name,
-        mimeType: file.type || 'application/octet-stream',
+        mimeType: normalizeMimeType(file),
       });
     }
 

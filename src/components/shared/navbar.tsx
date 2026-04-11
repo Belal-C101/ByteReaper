@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useTheme } from "next-themes";
@@ -27,10 +27,15 @@ export function Navbar() {
   const { theme, setTheme } = useTheme();
   const { user } = useAuth();
   const router = useRouter();
+  const [mounted, setMounted] = useState(false);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const themeOptions: Array<{ value: string; label: string }> = [
     { value: "dark", label: "Dark" },
@@ -40,7 +45,8 @@ export function Navbar() {
     { value: "theme-sunset", label: "Sunset" },
   ];
 
-  const currentThemeLabel = themeOptions.find((option) => option.value === theme)?.label || "Theme";
+  const activeTheme = mounted ? theme : undefined;
+  const currentThemeLabel = themeOptions.find((option) => option.value === activeTheme)?.label || "Theme";
 
   const handleSignOut = async () => {
     try {
@@ -223,7 +229,7 @@ export function Navbar() {
                           className="w-full flex items-center justify-between rounded-md px-2.5 py-2 text-sm hover:bg-accent"
                         >
                           <span>{option.label}</span>
-                          {theme === option.value && <Check className="h-3.5 w-3.5 text-primary" />}
+                          {activeTheme === option.value && <Check className="h-3.5 w-3.5 text-primary" />}
                         </button>
                       ))}
                     </motion.div>
@@ -323,7 +329,7 @@ export function Navbar() {
                         key={option.value}
                         type="button"
                         onClick={() => setTheme(option.value)}
-                        className={`rounded-md px-3 py-1.5 text-xs text-left ${theme === option.value ? "bg-primary text-primary-foreground" : "hover:bg-accent"}`}
+                        className={`rounded-md px-3 py-1.5 text-xs text-left ${activeTheme === option.value ? "bg-primary text-primary-foreground" : "hover:bg-accent"}`}
                       >
                         {option.label}
                       </button>

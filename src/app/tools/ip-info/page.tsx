@@ -33,7 +33,9 @@ export default function IpInfoPage() {
     setError("");
 
     try {
-      const endpoint = ip?.trim() ? `https://ipapi.co/${encodeURIComponent(ip.trim())}/json/` : "https://ipapi.co/json/";
+      const endpoint = ip?.trim()
+        ? `/api/tools/ip-info?ip=${encodeURIComponent(ip.trim())}`
+        : "/api/tools/ip-info";
       const response = await fetch(endpoint);
       const data = (await response.json()) as IpInfo & { error?: boolean; reason?: string };
       if (data.error) {

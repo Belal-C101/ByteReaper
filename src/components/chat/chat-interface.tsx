@@ -334,6 +334,34 @@ function FileIcon({ type }: { type: "code" | "image" | "text" | "other" }) {
   }
 }
 
+function openInlineDataFile(dataUrl: string, fileName: string): void {
+  try {
+    const [meta = "", encoded = ""] = dataUrl.split(",", 2);
+    const mime = meta.match(/:(.*?);/)?.[1] || "application/octet-stream";
+    const binary = atob(encoded);
+    const bytes = new Uint8Array(binary.length);
+
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+
+    const blob = new Blob([bytes], { type: mime });
+    const objectUrl = URL.createObjectURL(blob);
+    const popup = window.open(objectUrl, "_blank", "noopener,noreferrer");
+
+    if (!popup) {
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = fileName || "attachment";
+      anchor.click();
+    }
+
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  } catch (error) {
+    console.error("Failed to open inline fallback file:", error);
+  }
+}
+
 // ─── Model Selector ──────────────────────────────────────
 
 function ModelSelector({
@@ -1049,10 +1077,6 @@ export function ChatInterface() {
             setChatError(
               `Some attachments could not be linked (${linkSet.missingCount}/${attachments.length}). Try re-uploading those files.`
             );
-          } else if (uploadedCount < attachments.length) {
-            setChatError(
-              `Uploaded ${uploadedCount}/${attachments.length} attachment(s) to cloud. ${linkSet.fallbackCount} attachment(s) are shared using inline fallback links.`
-            );
           }
         } else {
           const linkSet = buildAttachmentMediaLinks(attachments, [], []);
@@ -1062,8 +1086,6 @@ export function ChatInterface() {
             setChatError(
               `Upload failed and ${linkSet.missingCount} attachment(s) could not be linked.`
             );
-          } else if (attachments.length > 0) {
-            setChatError("Cloud upload failed. Attachments are shared with inline fallback links.");
           }
         }
       } catch (uploadErr) {
@@ -1073,8 +1095,6 @@ export function ChatInterface() {
         uploadedFileLinks = linkSet.fileLinks;
         if (linkSet.missingCount > 0) {
           setChatError(`Upload failed and ${linkSet.missingCount} attachment(s) could not be linked.`);
-        } else if (attachments.length > 0) {
-          setChatError("Cloud upload failed. Attachments are shared with inline fallback links.");
         }
         // Continue — we still have the local attachments for AI analysis
       } finally {
@@ -2143,9 +2163,14 @@ function MessageBubble({
             {message.fileLinks.map((link, i) => (
               <a
                 key={`file-${i}`}
-                href={link.url}
+                href={link.url.startsWith("data:") ? "#" : link.url}
                 target="_blank"
                 rel="noopener noreferrer"
+                onClick={(event) => {
+                  if (!link.url.startsWith("data:")) return;
+                  event.preventDefault();
+                  openInlineDataFile(link.url, link.name);
+                }}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-secondary/60 hover:bg-secondary/80 text-xs text-muted-foreground hover:text-foreground transition-colors border border-border/30"
               >
                 <Download className="h-3.5 w-3.5" />
@@ -2157,7 +2182,10 @@ function MessageBubble({
         )}
 
         {/* Attachment Metadata Chips */}
-        {message.attachments && message.attachments.length > 0 && !message.imageLinks?.length && (
+        {message.attachments &&
+          message.attachments.length > 0 &&
+          !message.imageLinks?.length &&
+          !message.fileLinks?.length && (
           <div className="flex flex-wrap gap-1.5 mb-2">
             {message.attachments.map((attachment) => (
               <span key={attachment.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-secondary/60 text-xs text-muted-foreground">

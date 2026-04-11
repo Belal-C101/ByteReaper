@@ -39,6 +39,25 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { ChatMessage, FileAttachment, UploadedMediaLink } from "@/types/chat";
 import { useAuth } from "@/contexts/AuthContext";
@@ -499,37 +518,32 @@ async function triggerFileOpenOrDownload(url: string, fileName: string): Promise
   const resolvedName = fileName || "attachment";
   const previewable = isPreviewableInBrowser(resolvedName, undefined);
 
-  if (!previewable) {
-    const proxyDownloadUrl = buildFileProxyUrl(url, resolvedName, "attachment");
-    const viaProxy = triggerAnchorNavigation(proxyDownloadUrl, { downloadName: resolvedName });
-    if (viaProxy) return;
-  }
-
   if (previewable) {
+    // For previewable files (PDF, images, text, etc.), try opening in a new tab
     const opened = tryOpenInNewTab(url);
     if (opened) return;
-  }
 
-  const downloaded = await tryDownloadRemoteUrl(url, resolvedName);
-  if (downloaded) return;
-
-  if (previewable) {
+    // Fallback: proxy inline
     const proxyInlineUrl = buildFileProxyUrl(url, resolvedName, "inline");
     const openedProxyInline = tryOpenInNewTab(proxyInlineUrl);
     if (openedProxyInline) return;
-  } else {
-    const proxyDownloadUrl = buildFileProxyUrl(url, resolvedName, "attachment");
-    const viaProxy = triggerAnchorNavigation(proxyDownloadUrl, { downloadName: resolvedName });
-    if (viaProxy) return;
   }
 
+  // For non-previewable files (DOCX, etc.) or if preview failed,
+  // use anchor-based download which doesn't trigger popup blocker
+  const proxyDownloadUrl = buildFileProxyUrl(url, resolvedName, "attachment");
+  const viaProxy = triggerAnchorNavigation(proxyDownloadUrl, { downloadName: resolvedName });
+  if (viaProxy) return;
+
+  // Last resort: try fetching and triggering blob download
+  const downloaded = await tryDownloadRemoteUrl(url, resolvedName);
+  if (downloaded) return;
+
+  // Final fallback: direct anchor
   const directDownload = triggerAnchorNavigation(url, { downloadName: resolvedName });
   if (directDownload) return;
 
-  const openedDirect = tryOpenInNewTab(url);
-  if (!openedDirect) {
-    console.error("Failed to trigger hosted file link:", { url, fileName: resolvedName });
-  }
+  console.error("Failed to trigger hosted file link:", { url, fileName: resolvedName });
 }
 
 function isDataUrl(url: string | undefined): boolean {
@@ -759,6 +773,13 @@ export function ChatInterface() {
   const [promptMenuOpen, setPromptMenuOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [runnerDoc, setRunnerDoc] = useState<string | null>(null);
+
+  // Modal state for rename / delete dialogs
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [renameDialogSession, setRenameDialogSession] = useState<ChatSession | null>(null);
+  const [renameDialogValue, setRenameDialogValue] = useState("");
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteDialogSession, setDeleteDialogSession] = useState<ChatSession | null>(null);
 
   const codeTheme: CodeTheme = theme === "light" ? "oneLight" : "oneDark";
 
@@ -1011,19 +1032,30 @@ export function ChatInterface() {
 
   const handleRenameSession = useCallback(async (session: ChatSession) => {
     if (!user) return;
-    const nextName = window.prompt("Rename chat", session.title);
-    if (!nextName?.trim()) return;
+    setRenameDialogSession(session);
+    setRenameDialogValue(session.title || "");
+    setRenameDialogOpen(true);
+  }, [user]);
+
+  const confirmRenameSession = useCallback(async () => {
+    if (!user || !renameDialogSession) return;
+    const nextName = renameDialogValue.trim();
+    if (!nextName) return;
+    setRenameDialogOpen(false);
     setChatError(null);
     try {
-      const renamedId = await renameChatSession(session.id, nextName.trim(), user.uid);
-      const shouldKeepSelected = sessionId === session.id;
+      const renamedId = await renameChatSession(renameDialogSession.id, nextName, user.uid);
+      const shouldKeepSelected = sessionId === renameDialogSession.id;
       await loadSessions(shouldKeepSelected ? renamedId : null);
       if (shouldKeepSelected) setSessionId(renamedId);
     } catch (error) {
       console.error("Failed to rename chat:", error);
       setChatError(getErrorMessage(error, "Could not rename this chat."));
+    } finally {
+      setRenameDialogSession(null);
+      setRenameDialogValue("");
     }
-  }, [user, sessionId, loadSessions]);
+  }, [user, sessionId, loadSessions, renameDialogSession, renameDialogValue]);
 
   const handleArchiveSession = useCallback(async (session: ChatSession) => {
     if (!user) return;
@@ -1091,8 +1123,15 @@ export function ChatInterface() {
 
   const handleDeleteSession = useCallback(async (session: ChatSession) => {
     if (!user) return;
-    const shouldDelete = window.confirm(`Delete "${session.title}"? This cannot be undone.`);
-    if (!shouldDelete) return;
+    setDeleteDialogSession(session);
+    setDeleteDialogOpen(true);
+  }, [user]);
+
+  const confirmDeleteSession = useCallback(async () => {
+    if (!user || !deleteDialogSession) return;
+    const session = deleteDialogSession;
+    setDeleteDialogOpen(false);
+    setDeleteDialogSession(null);
     setChatError(null);
 
     const previousSessions = sessions;
@@ -1127,7 +1166,7 @@ export function ChatInterface() {
       }
       setChatError(getErrorMessage(error, "Could not delete this chat."));
     }
-  }, [user, sessionId, draftSession, sessions, archivedSessions]);
+  }, [user, sessionId, draftSession, sessions, archivedSessions, deleteDialogSession]);
 
   const handleFileUpload = useCallback(async (files: FileList) => {
     setChatError(null);
@@ -1459,21 +1498,19 @@ export function ChatInterface() {
     setChatError(null);
 
     try {
-      let blob = await attachmentToBlobForDownload(attachment);
-      let fileName = attachment.name;
+      const blob = await attachmentToBlobForDownload(attachment);
 
       if (!blob) {
-        const pickedFile = await promptForAttachmentFile();
-        if (!pickedFile) {
-          setChatError("This history item only has metadata. Select the original file to restore a permanent link.");
-          return;
-        }
-
-        blob = pickedFile;
-        fileName = pickedFile.name;
+        // No local content available — show a descriptive error instead of opening file picker
+        setChatError(`The file "${attachment.name}" was not permanently hosted. The original content is no longer available.`);
+        return;
       }
 
-      const hostedLink = await uploadBlobForHostedLink(blob, fileName);
+      // Try to open/download from local blob directly first
+      triggerBlobDownloadOrOpen(blob, attachment.name);
+
+      // Also attempt to create a hosted link in the background for future access
+      const hostedLink = await uploadBlobForHostedLink(blob, attachment.name);
 
       if (hostedLink) {
         const existingFileLinks = message.fileLinks || [];
@@ -1502,13 +1539,7 @@ export function ChatInterface() {
             console.error("Failed to persist recovered file link:", persistError);
           }
         }
-
-        await triggerFileOpenOrDownload(hostedLink.url, hostedLink.name || fileName);
-        return;
       }
-
-      triggerBlobDownloadOrOpen(blob, fileName);
-      setChatError("Could not create a permanent hosted URL, but the file was opened locally.");
     } catch (error) {
       console.error("Failed to open local attachment fallback:", error);
       setChatError("Could not open this file. Please re-upload it.");
@@ -2602,6 +2633,69 @@ export function ChatInterface() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* ─── Rename Chat Dialog ────────────────────── */}
+      <Dialog open={renameDialogOpen} onOpenChange={(open) => {
+        if (!open) {
+          setRenameDialogOpen(false);
+          setRenameDialogSession(null);
+          setRenameDialogValue("");
+        }
+      }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rename Chat</DialogTitle>
+            <DialogDescription>Enter a new name for this chat session.</DialogDescription>
+          </DialogHeader>
+          <Input
+            value={renameDialogValue}
+            onChange={(e) => setRenameDialogValue(e.target.value)}
+            placeholder="Chat name"
+            onKeyDown={(e) => { if (e.key === "Enter") confirmRenameSession(); }}
+            autoFocus
+          />
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="ghost" onClick={() => {
+              setRenameDialogOpen(false);
+              setRenameDialogSession(null);
+              setRenameDialogValue("");
+            }}>
+              Cancel
+            </Button>
+            <Button onClick={confirmRenameSession} disabled={!renameDialogValue.trim()}>
+              Rename
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── Delete Chat Confirmation ────────────────── */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={(open) => {
+        if (!open) {
+          setDeleteDialogOpen(false);
+          setDeleteDialogSession(null);
+        }
+      }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Chat</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete &ldquo;{deleteDialogSession?.title || "this chat"}&rdquo;? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => {
+              setDeleteDialogOpen(false);
+              setDeleteDialogSession(null);
+            }}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDeleteSession} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

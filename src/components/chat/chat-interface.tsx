@@ -175,6 +175,10 @@ function groupSessionsByDate(sessions: ChatSession[]): { label: string; sessions
   return groups.filter((g) => g.sessions.length > 0);
 }
 
+function sortSessionsByUpdatedAt(list: ChatSession[]): ChatSession[] {
+  return [...list].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+}
+
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -766,6 +770,7 @@ export function ChatInterface() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dragCounterRef = useRef(0);
   const migratingLegacySessionsRef = useRef<Set<string>>(new Set());
+  const skipNextSessionMessagesReloadRef = useRef<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -860,6 +865,13 @@ export function ChatInterface() {
 
   useEffect(() => {
     if (!sessionId || isDraftSessionId(sessionId)) { setMessages([]); return; }
+
+    if (skipNextSessionMessagesReloadRef.current === sessionId) {
+      skipNextSessionMessagesReloadRef.current = null;
+      setIsMessagesLoading(false);
+      return;
+    }
+
     let isMounted = true;
     setIsMessagesLoading(true);
     getSessionMessages(sessionId, user?.uid)
@@ -1016,44 +1028,106 @@ export function ChatInterface() {
   const handleArchiveSession = useCallback(async (session: ChatSession) => {
     if (!user) return;
     setChatError(null);
+
+    const previousSessions = sessions;
+    const previousArchivedSessions = archivedSessions;
+    const wasActive = sessionId === session.id;
+    const remainingSessions = sessions.filter((candidate) => candidate.id !== session.id);
+    const fallbackSessionId = wasActive ? (remainingSessions[0]?.id ?? null) : sessionId;
+    const archivedCopy: ChatSession = {
+      ...session,
+      isArchived: true,
+      updatedAt: new Date(),
+    };
+
+    setSessions(remainingSessions);
+    setArchivedSessions((prev) => sortSessionsByUpdatedAt([archivedCopy, ...prev.filter((candidate) => candidate.id !== session.id)]));
+
+    if (wasActive) {
+      setSessionId(fallbackSessionId);
+      if (!fallbackSessionId) {
+        setMessages([]);
+      }
+    }
+
     try {
       await archiveChatSession(session.id, user.uid);
-      if (sessionId === session.id) { setSessionId(null); setMessages([]); }
-      await loadSessions();
     } catch (error) {
       console.error("Failed to archive chat:", error);
+      setSessions(previousSessions);
+      setArchivedSessions(previousArchivedSessions);
+      if (wasActive) {
+        setSessionId(session.id);
+      }
       setChatError(getErrorMessage(error, "Could not archive this chat."));
     }
-  }, [user, sessionId, loadSessions]);
+  }, [user, sessionId, sessions, archivedSessions]);
 
   const handleRestoreArchivedSession = useCallback(async (session: ChatSession) => {
     if (!user) return;
     setChatError(null);
+
+    const previousSessions = sessions;
+    const previousArchivedSessions = archivedSessions;
+    const restoredSession: ChatSession = {
+      ...session,
+      isArchived: false,
+      updatedAt: new Date(),
+    };
+
+    setArchivedSessions((prev) => prev.filter((candidate) => candidate.id !== session.id));
+    setSessions((prev) => sortSessionsByUpdatedAt([restoredSession, ...prev.filter((candidate) => candidate.id !== session.id)]));
+    setSessionId(session.id);
+
     try {
       await restoreArchivedChatSession(session.id, user.uid);
-      await loadSessions(session.id);
-      setSessionId(session.id);
     } catch (error) {
       console.error("Failed to restore archived chat:", error);
+      setSessions(previousSessions);
+      setArchivedSessions(previousArchivedSessions);
       setChatError(getErrorMessage(error, "Could not restore this archived chat."));
     }
-  }, [user, loadSessions]);
+  }, [user, sessions, archivedSessions]);
 
   const handleDeleteSession = useCallback(async (session: ChatSession) => {
     if (!user) return;
     const shouldDelete = window.confirm(`Delete "${session.title}"? This cannot be undone.`);
     if (!shouldDelete) return;
     setChatError(null);
+
+    const previousSessions = sessions;
+    const previousArchivedSessions = archivedSessions;
+    const previousDraftSession = draftSession;
+    const wasActive = sessionId === session.id;
+    const remainingSessions = sessions.filter((candidate) => candidate.id !== session.id);
+    const fallbackSessionId = wasActive ? (remainingSessions[0]?.id ?? null) : sessionId;
+
+    setSessions((prev) => prev.filter((candidate) => candidate.id !== session.id));
+    setArchivedSessions((prev) => prev.filter((candidate) => candidate.id !== session.id));
+    if (draftSession?.id === session.id) {
+      setDraftSession(null);
+    }
+
+    if (wasActive) {
+      setSessionId(fallbackSessionId);
+      if (!fallbackSessionId) {
+        setMessages([]);
+      }
+    }
+
     try {
       await deleteChatSession(session.id, user.uid);
-      if (sessionId === session.id) { setSessionId(null); setMessages([]); }
-      if (draftSession?.id === session.id) setDraftSession(null);
-      await loadSessions();
     } catch (error) {
       console.error("Failed to delete chat:", error);
+      setSessions(previousSessions);
+      setArchivedSessions(previousArchivedSessions);
+      setDraftSession(previousDraftSession);
+      if (wasActive) {
+        setSessionId(session.id);
+      }
       setChatError(getErrorMessage(error, "Could not delete this chat."));
     }
-  }, [user, sessionId, draftSession, loadSessions]);
+  }, [user, sessionId, draftSession, sessions, archivedSessions]);
 
   const handleFileUpload = useCallback(async (files: FileList) => {
     setChatError(null);
@@ -1689,12 +1763,47 @@ export function ChatInterface() {
         await saveChatExchange(targetSessionId, currentUser.uid, userMsg, assistantMsg, model, currentUser.email);
 
         // NOW safe to update the session ID — messages are already in Firestore
+        const exchangeTimestamp = assistantMsg.timestamp instanceof Date
+          ? assistantMsg.timestamp
+          : new Date(assistantMsg.timestamp);
+
+        const optimisticMessageDelta = 2;
+
         if (needsNewSession) {
           setDraftSession(null);
-          setSessions((prev) => prev.filter((s) => !s.isDraft));
+          setSessions((prev) => {
+            const base = prev.filter((s) => !s.isDraft && s.id !== targetSessionId);
+            const createdSession: ChatSession = {
+              id: targetSessionId,
+              userId: currentUser.uid,
+              userEmail: currentUser.email ?? undefined,
+              title: targetSessionId,
+              model,
+              createdAt: exchangeTimestamp,
+              updatedAt: exchangeTimestamp,
+              messageCount: optimisticMessageDelta,
+              isArchived: false,
+            };
+            return sortSessionsByUpdatedAt([createdSession, ...base]);
+          });
+          skipNextSessionMessagesReloadRef.current = targetSessionId;
           setSessionId(targetSessionId);
+        } else {
+          setSessions((prev) =>
+            sortSessionsByUpdatedAt(
+              prev.map((s) =>
+                s.id === targetSessionId
+                  ? {
+                      ...s,
+                      model,
+                      updatedAt: exchangeTimestamp,
+                      messageCount: (s.messageCount || 0) + optimisticMessageDelta,
+                    }
+                  : s
+              )
+            )
+          );
         }
-        await loadSessions(targetSessionId);
       }
     } catch (persistError) {
       console.error("Background persist failed:", persistError);

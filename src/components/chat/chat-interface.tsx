@@ -406,6 +406,15 @@ function openInlineDataFile(dataUrl: string, fileName: string): void {
   }
 }
 
+function triggerFileOpenOrDownload(url: string, fileName: string): void {
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName || "attachment";
+  anchor.target = "_self";
+  anchor.rel = "noopener noreferrer";
+  anchor.click();
+}
+
 function isDataUrl(url: string | undefined): boolean {
   return typeof url === "string" && url.startsWith("data:");
 }
@@ -1146,7 +1155,7 @@ export function ChatInterface() {
 
   const handleLegacyFileLinkClick = useCallback(async (message: ChatMessage, link: UploadedMediaLink) => {
     if (!isDataUrl(link.url)) {
-      window.open(link.url, "_blank", "noopener,noreferrer");
+      triggerFileOpenOrDownload(link.url, link.name);
       return;
     }
 
@@ -1189,7 +1198,7 @@ export function ChatInterface() {
       console.error("Failed to persist migrated file link:", error);
     }
 
-    window.open(migrated.url, "_blank", "noopener,noreferrer");
+    triggerFileOpenOrDownload(migrated.url, migrated.name || link.name);
   }, [sessionId, user?.uid, isDraftSessionId]);
 
   const openRunner = useCallback((language: string, value: string) => {
@@ -2384,10 +2393,7 @@ function MessageBubble({
               <a
                 key={`file-${i}`}
                 href={link.url.startsWith("data:") ? "#" : link.url}
-                target="_blank"
-                rel="noopener noreferrer"
                 onClick={(event) => {
-                  if (!link.url.startsWith("data:")) return;
                   event.preventDefault();
                   void onLegacyFileLinkClick(message, link);
                 }}

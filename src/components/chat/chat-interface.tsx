@@ -391,12 +391,14 @@ function openInlineDataFile(dataUrl: string, fileName: string): void {
 
     const blob = new Blob([bytes], { type: mime });
     const objectUrl = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = objectUrl;
-    anchor.download = fileName || "attachment";
-    anchor.target = "_self";
-    anchor.rel = "noopener noreferrer";
-    anchor.click();
+    const popup = window.open(objectUrl, "_blank", "noopener,noreferrer");
+
+    if (!popup) {
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = fileName || "attachment";
+      anchor.click();
+    }
 
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
   } catch (error) {

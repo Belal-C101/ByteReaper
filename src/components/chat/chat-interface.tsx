@@ -1637,11 +1637,12 @@ export function ChatInterface() {
           uploadedImageLinks = linkSet.imageLinks;
           uploadedFileLinks = linkSet.fileLinks;
 
+          console.info('[Upload] Cloud OK — imageLinks:', uploadedImageLinks.length, 'fileLinks:', uploadedFileLinks.length);
         } else {
-          console.warn('[Upload] Server returned non-OK response');
+          console.warn('[Upload] Server returned non-OK response:', uploadRes.status);
         }
       } catch (uploadErr) {
-        console.error('File upload to cloud failed:', uploadErr);
+        console.error('[Upload] Cloud upload failed:', uploadErr);
         // Continue — we still have the local attachments for AI analysis
       } finally {
         setIsUploading(false);
@@ -1669,6 +1670,11 @@ export function ChatInterface() {
         dataUrl = `data:${mime};base64,${encoded}`;
       }
       pool.push({ url: dataUrl, name: att.name, provider: "local" });
+    }
+
+    if (attachments.length > 0) {
+      console.info('[Upload] Final counts — imageLinks:', uploadedImageLinks.length, 'fileLinks:', uploadedFileLinks.length,
+        'providers:', uploadedFileLinks.map(l => l.provider).join(',') || 'none');
     }
 
     const userMessage: ChatMessage = {

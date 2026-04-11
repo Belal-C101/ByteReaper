@@ -65,6 +65,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 const MAX_ATTACHMENT_SIZE_BYTES = 900 * 1024;
+const MAX_ATTACHMENTS_PER_MESSAGE = 1;
 const DRAFT_CHAT_ID_PREFIX = "draft-chat-";
 const EMPTY_STATE_PROMPTS = [
   "Review this React component for performance",
@@ -867,8 +868,21 @@ export function ChatInterface() {
 
   const handleFileUpload = useCallback(async (files: FileList) => {
     setChatError(null);
+    const availableSlots = Math.max(MAX_ATTACHMENTS_PER_MESSAGE - attachments.length, 0);
+
+    if (availableSlots === 0) {
+      setChatError(`Free OpenRouter mode allows up to ${MAX_ATTACHMENTS_PER_MESSAGE} file per message. Remove an attachment to add another.`);
+      return;
+    }
+
+    const selectedFiles = Array.from(files);
+    const filesToProcess = selectedFiles.slice(0, availableSlots);
+    if (selectedFiles.length > filesToProcess.length) {
+      setChatError(`Only ${MAX_ATTACHMENTS_PER_MESSAGE} file is allowed per message in free mode.`);
+    }
+
     const newAttachments: FileAttachment[] = [];
-    for (const file of Array.from(files)) {
+    for (const file of filesToProcess) {
       try {
         if (file.size > MAX_ATTACHMENT_SIZE_BYTES) {
           setChatError(`"${file.name}" is too large. Keep files under ${Math.round(MAX_ATTACHMENT_SIZE_BYTES / 1024)}KB.`);
@@ -895,7 +909,7 @@ export function ChatInterface() {
       }
     }
     if (newAttachments.length > 0) setAttachments((prev) => [...prev, ...newAttachments]);
-  }, []);
+  }, [attachments.length]);
 
   const removeAttachment = (id: string) => setAttachments((prev) => prev.filter((a) => a.id !== id));
 
@@ -1148,6 +1162,12 @@ export function ChatInterface() {
       setChatError("This chat is archived. Restore it before sending new messages.");
       return;
     }
+
+    if (attachments.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+      setChatError(`Please keep attachments to ${MAX_ATTACHMENTS_PER_MESSAGE} file per message in free mode.`);
+      return;
+    }
+
     setChatError(null);
 
     const trimmedInput = input.trim();

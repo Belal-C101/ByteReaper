@@ -22,7 +22,6 @@ import { signOut } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { ProfileModal } from "./profile-modal";
-import { TOOL_CATEGORIES, TOOLS } from "@/lib/tools/catalog";
 
 export function Navbar() {
   const { theme, setTheme } = useTheme();
@@ -30,7 +29,6 @@ export function Navbar() {
   const router = useRouter();
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
-  const [toolsOpen, setToolsOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
 
@@ -80,71 +78,12 @@ export function Navbar() {
 
           {/* Navigation */}
           <nav className="flex items-center gap-1">
-            <div className="relative hidden md:block">
-              <button
-                onClick={() => setToolsOpen(!toolsOpen)}
-                className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-              >
+            <Button asChild variant="ghost" size="sm" className="hidden md:inline-flex gap-2 text-muted-foreground hover:text-foreground transition-colors">
+              <Link href="/tools">
                 <Wrench className="h-4 w-4" />
-                Tools
-                <ChevronDown className={`h-3 w-3 transition-transform ${toolsOpen ? "rotate-180" : ""}`} />
-              </button>
-
-              <AnimatePresence>
-                {toolsOpen && (
-                  <>
-                    <div className="fixed inset-0 z-40" onClick={() => setToolsOpen(false)} />
-                    <motion.div
-                      initial={{ opacity: 0, y: -6, scale: 0.98 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: -6, scale: 0.98 }}
-                      transition={{ duration: 0.15 }}
-                      className="absolute left-0 top-full mt-1.5 z-50 w-[720px] rounded-2xl border border-border/60 bg-popover/95 backdrop-blur-xl shadow-2xl p-5"
-                    >
-                      <div className="flex items-center justify-between mb-4">
-                        <p className="text-sm font-medium">Explore Developer Tools</p>
-                        <Button asChild size="sm" variant="outline">
-                          <Link href="/tools" onClick={() => setToolsOpen(false)}>
-                            Open Hub
-                          </Link>
-                        </Button>
-                      </div>
-                      <div className="grid grid-cols-3 gap-4">
-                        {TOOL_CATEGORIES.filter((category) => category !== "All").map((category) => (
-                          <div key={category} className="space-y-2">
-                            <p className="text-xs uppercase tracking-wide text-muted-foreground">{category}</p>
-                            <div className="space-y-1.5">
-                              {TOOLS.filter((tool) => tool.category === category)
-                                .slice(0, 3)
-                                .map((tool) => (
-                                  <Link
-                                    key={tool.slug}
-                                    href={`/tools/${tool.slug}`}
-                                    onClick={() => setToolsOpen(false)}
-                                    className="block rounded-md px-2 py-1.5 hover:bg-accent text-sm leading-tight"
-                                  >
-                                    {tool.title}
-                                  </Link>
-                                ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="mt-4 pt-3 border-t border-border/50">
-                        <Link
-                          href="/tools"
-                          onClick={() => setToolsOpen(false)}
-                          className="block w-full rounded-lg border border-border/60 px-3 py-2 text-sm font-medium text-center hover:bg-accent transition-colors"
-                        >
-                          Explore more tools
-                        </Link>
-                      </div>
-                    </motion.div>
-                  </>
-                )}
-              </AnimatePresence>
-            </div>
+                <span className="text-sm">Tools</span>
+              </Link>
+            </Button>
 
             {user ? (
               <>

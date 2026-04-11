@@ -6,8 +6,6 @@ import Image from "next/image";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import {
-  Moon,
-  Sun,
   Github,
   MessageSquare,
   LogOut,
@@ -16,6 +14,8 @@ import {
   Wrench,
   Menu,
   X,
+  Palette,
+  Check,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { signOut } from "@/lib/auth";
@@ -32,6 +32,17 @@ export function Navbar() {
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+
+  const themeOptions: Array<{ value: string; label: string }> = [
+    { value: "dark", label: "Dark" },
+    { value: "light", label: "Light" },
+    { value: "theme-ocean", label: "Ocean" },
+    { value: "theme-forest", label: "Forest" },
+    { value: "theme-sunset", label: "Sunset" },
+  ];
+
+  const currentThemeLabel = themeOptions.find((option) => option.value === theme)?.label || "Theme";
 
   const handleSignOut = async () => {
     try {
@@ -239,16 +250,48 @@ export function Navbar() {
 
             <div className="w-px h-5 bg-border mx-1" />
 
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-muted-foreground hover:text-foreground"
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            >
-              <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-              <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-              <span className="sr-only">Toggle theme</span>
-            </Button>
+            <div className="relative hidden md:block">
+              <button
+                onClick={() => setThemeMenuOpen((prev) => !prev)}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                aria-label="Open theme picker"
+                title="Change theme"
+              >
+                <Palette className="h-3.5 w-3.5" />
+                <span>{currentThemeLabel}</span>
+                <ChevronDown className={`h-3 w-3 transition-transform ${themeMenuOpen ? "rotate-180" : ""}`} />
+              </button>
+
+              <AnimatePresence>
+                {themeMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setThemeMenuOpen(false)} />
+                    <motion.div
+                      initial={{ opacity: 0, y: -6, scale: 0.98 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -6, scale: 0.98 }}
+                      transition={{ duration: 0.15 }}
+                      className="absolute right-0 top-full mt-1.5 z-50 w-44 rounded-xl border border-border/60 bg-popover/95 backdrop-blur-xl shadow-2xl p-1.5"
+                    >
+                      {themeOptions.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => {
+                            setTheme(option.value);
+                            setThemeMenuOpen(false);
+                          }}
+                          className="w-full flex items-center justify-between rounded-md px-2.5 py-2 text-sm hover:bg-accent"
+                        >
+                          <span>{option.label}</span>
+                          {theme === option.value && <Check className="h-3.5 w-3.5 text-primary" />}
+                        </button>
+                      ))}
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
 
             <Button asChild variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground">
               <a
@@ -332,6 +375,22 @@ export function Navbar() {
                     </Link>
                   </>
                 )}
+
+                <div className="mt-2 pt-2 border-t border-border/40">
+                  <p className="px-3 pb-1 text-[11px] uppercase tracking-wide text-muted-foreground">Theme</p>
+                  <div className="grid grid-cols-2 gap-1">
+                    {themeOptions.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => setTheme(option.value)}
+                        className={`rounded-md px-3 py-1.5 text-xs text-left ${theme === option.value ? "bg-primary text-primary-foreground" : "hover:bg-accent"}`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
             </motion.div>
           )}

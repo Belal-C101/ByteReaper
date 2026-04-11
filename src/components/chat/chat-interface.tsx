@@ -37,6 +37,7 @@ import {
   Eye,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ChatMessage, FileAttachment, UploadedMediaLink } from "@/types/chat";
@@ -58,7 +59,7 @@ import {
 } from "@/lib/chat-history";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark, oneLight, okaidia } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 const MAX_ATTACHMENT_SIZE_BYTES = 900 * 1024;
 const DRAFT_CHAT_ID_PREFIX = "draft-chat-";
@@ -89,7 +90,7 @@ const BUILT_IN_PROMPT_TEMPLATES = [
   "Document this code with JSDoc comments",
 ];
 
-type CodeTheme = "oneDark" | "oneLight" | "okaidia";
+type CodeTheme = "oneDark" | "oneLight";
 
 const generateId = () => Math.random().toString(36).substring(2, 15);
 
@@ -338,6 +339,7 @@ function TypingIndicator() {
 // ─── Main Chat Interface ─────────────────────────────────
 
 export function ChatInterface() {
+  const { theme } = useTheme();
   const { user } = useAuth();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -368,8 +370,9 @@ export function ChatInterface() {
   const [promptTemplates, setPromptTemplates] = useState<string[]>([]);
   const [promptMenuOpen, setPromptMenuOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
-  const [codeTheme, setCodeTheme] = useState<CodeTheme>("oneDark");
   const [runnerDoc, setRunnerDoc] = useState<string | null>(null);
+
+  const codeTheme: CodeTheme = theme === "light" ? "oneLight" : "oneDark";
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1833,17 +1836,6 @@ export function ChatInterface() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <select
-                    value={codeTheme}
-                    onChange={(e) => setCodeTheme(e.target.value as CodeTheme)}
-                    className="h-6 rounded-md border border-border/50 bg-background/70 px-1.5 text-[10px] text-muted-foreground"
-                    title="Code highlight theme"
-                  >
-                    <option value="oneDark">Theme: Dark</option>
-                    <option value="oneLight">Theme: Light</option>
-                    <option value="okaidia">Theme: Okaidia</option>
-                  </select>
-
                   {isUploading && (
                     <span className="text-[10px] text-primary/60 flex items-center gap-1">
                       <Loader2 className="h-3 w-3 animate-spin" /> Uploading...
@@ -2182,7 +2174,6 @@ function CodeBlock({
   const styleMap = {
     oneDark,
     oneLight,
-    okaidia,
   } as const;
 
   const handleCopy = () => {

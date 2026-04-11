@@ -201,6 +201,10 @@ const EXTENSION_MIME_MAP: Record<string, string> = {
   md: "text/markdown",
   markdown: "text/markdown",
   txt: "text/plain",
+  csv: "text/csv",
+  xml: "application/xml",
+  ini: "text/plain",
+  log: "text/plain",
   json: "application/json",
   js: "text/javascript",
   jsx: "text/javascript",
@@ -222,6 +226,25 @@ const EXTENSION_MIME_MAP: Record<string, string> = {
   rs: "text/rust",
   rb: "text/x-ruby",
   php: "application/x-httpd-php",
+  pdf: "application/pdf",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ppt: "application/vnd.ms-powerpoint",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  zip: "application/zip",
+  rar: "application/vnd.rar",
+  "7z": "application/x-7z-compressed",
+  tar: "application/x-tar",
+  gz: "application/gzip",
+  mp3: "audio/mpeg",
+  wav: "audio/wav",
+  ogg: "audio/ogg",
+  mp4: "video/mp4",
+  webm: "video/webm",
+  mov: "video/quicktime",
+  avi: "video/x-msvideo",
 };
 
 function resolveMimeType(file: FileLike): string {
@@ -298,6 +321,111 @@ function FileIcon({ type }: { type: "code" | "image" | "text" | "other" }) {
   }
 }
 
+const BROWSER_PREVIEW_EXTENSIONS = new Set([
+  "txt",
+  "md",
+  "markdown",
+  "json",
+  "csv",
+  "xml",
+  "yaml",
+  "yml",
+  "pdf",
+  "svg",
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "mp3",
+  "wav",
+  "ogg",
+  "mp4",
+  "webm",
+  "m4v",
+  "html",
+  "htm",
+  "js",
+  "ts",
+  "tsx",
+  "jsx",
+  "css",
+  "py",
+  "go",
+  "rs",
+  "java",
+  "c",
+  "cpp",
+  "h",
+  "php",
+  "rb",
+  "sh",
+  "sql",
+]);
+
+function getFileExtension(value: string | undefined): string {
+  if (!value) return "";
+
+  const sanitized = value.split("?")[0].split("#")[0];
+  const ext = sanitized.split(".").pop();
+  return ext ? ext.toLowerCase() : "";
+}
+
+function isPreviewableInBrowser(fileName: string, mimeType?: string): boolean {
+  const effectiveMime = typeof mimeType === "string" && mimeType.trim().length > 0
+    ? mimeType
+    : resolveMimeType({ name: fileName });
+
+  if (
+    effectiveMime.startsWith("image/") ||
+    effectiveMime.startsWith("text/") ||
+    effectiveMime.startsWith("audio/") ||
+    effectiveMime.startsWith("video/") ||
+    effectiveMime.includes("json") ||
+    effectiveMime.includes("pdf") ||
+    effectiveMime.includes("xml")
+  ) {
+    return true;
+  }
+
+  const ext = getFileExtension(fileName);
+  return BROWSER_PREVIEW_EXTENSIONS.has(ext);
+}
+
+function triggerBlobDownload(blob: Blob, fileName: string): void {
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = fileName || "attachment";
+  anchor.rel = "noopener noreferrer";
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+}
+
+function tryOpenInNewTab(url: string): boolean {
+  try {
+    const opened = window.open(url, "_blank", "noopener,noreferrer");
+    return Boolean(opened);
+  } catch {
+    return false;
+  }
+}
+
+async function tryDownloadRemoteUrl(url: string, fileName: string): Promise<boolean> {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return false;
+
+    const blob = await response.blob();
+    triggerBlobDownload(blob, fileName);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function openInlineDataFile(dataUrl: string, fileName: string): void {
   try {
     const [meta = "", encoded = ""] = dataUrl.split(",", 2);
@@ -317,31 +445,43 @@ function openInlineDataFile(dataUrl: string, fileName: string): void {
 }
 
 function triggerBlobDownloadOrOpen(blob: Blob, fileName: string): void {
-  const objectUrl = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = objectUrl;
-  anchor.download = fileName || "attachment";
-  anchor.target = "_blank";
-  anchor.rel = "noopener noreferrer";
-  document.body.appendChild(anchor);
-  anchor.click();
-  document.body.removeChild(anchor);
-  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  const effectiveMime = blob.type || resolveMimeType({ name: fileName });
+
+  if (isPreviewableInBrowser(fileName, effectiveMime)) {
+    const objectUrl = URL.createObjectURL(blob);
+    const opened = tryOpenInNewTab(objectUrl);
+    if (opened) {
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+      return;
+    }
+    URL.revokeObjectURL(objectUrl);
+  }
+
+  triggerBlobDownload(blob, fileName);
 }
 
-function triggerFileOpenOrDownload(url: string, fileName: string): void {
+async function triggerFileOpenOrDownload(url: string, fileName: string): Promise<void> {
+  const resolvedName = fileName || "attachment";
+
+  if (isPreviewableInBrowser(resolvedName, undefined)) {
+    const opened = tryOpenInNewTab(url);
+    if (opened) return;
+  }
+
+  const downloaded = await tryDownloadRemoteUrl(url, resolvedName);
+  if (downloaded) return;
+
   try {
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = fileName || "attachment";
-    anchor.target = "_blank";
+    anchor.download = resolvedName;
     anchor.rel = "noopener noreferrer";
     document.body.appendChild(anchor);
     anchor.click();
     document.body.removeChild(anchor);
   } catch (error) {
     console.error("Failed to trigger hosted file link:", error);
-    window.open(url, "_blank", "noopener,noreferrer");
+    tryOpenInNewTab(url);
   }
 }
 
@@ -376,9 +516,8 @@ async function attachmentToBlobForDownload(attachment: FileAttachment): Promise<
   });
 }
 
-async function uploadLegacyDataUrlLink(dataUrl: string, fileName: string): Promise<UploadedMediaLink | null> {
+async function uploadBlobForHostedLink(blob: Blob, fileName: string): Promise<UploadedMediaLink | null> {
   try {
-    const blob = await dataUrlToBlob(dataUrl);
     const formData = new FormData();
     formData.append("files", blob, fileName || "attachment");
 
@@ -388,8 +527,64 @@ async function uploadLegacyDataUrlLink(dataUrl: string, fileName: string): Promi
     const uploadData = await uploadRes.json();
     const normalizedImages = normalizeUploadedMediaLinks(uploadData.images);
     const normalizedFiles = normalizeUploadedMediaLinks(uploadData.files);
-    const first = normalizedImages[0] || normalizedFiles[0];
-    return first || null;
+    const candidates = [...normalizedImages, ...normalizedFiles];
+
+    const matched = candidates.find((candidate) => candidate.name === fileName);
+    return matched || candidates[0] || null;
+  } catch (error) {
+    console.error("Failed to upload blob for hosted link:", error);
+    return null;
+  }
+}
+
+async function promptForAttachmentFile(): Promise<File | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "*/*";
+    input.style.position = "fixed";
+    input.style.opacity = "0";
+    input.style.pointerEvents = "none";
+    input.style.left = "-9999px";
+    document.body.appendChild(input);
+
+    let settled = false;
+
+    const cleanup = () => {
+      input.removeEventListener("change", handleChange);
+      window.removeEventListener("focus", handleWindowFocus);
+      if (document.body.contains(input)) {
+        document.body.removeChild(input);
+      }
+    };
+
+    const settle = (file: File | null) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(file);
+    };
+
+    const handleChange = () => settle(input.files?.[0] ?? null);
+
+    const handleWindowFocus = () => {
+      window.setTimeout(() => {
+        if (!settled && (!input.files || input.files.length === 0)) {
+          settle(null);
+        }
+      }, 200);
+    };
+
+    input.addEventListener("change", handleChange);
+    window.addEventListener("focus", handleWindowFocus, { once: true });
+    input.click();
+  });
+}
+
+async function uploadLegacyDataUrlLink(dataUrl: string, fileName: string): Promise<UploadedMediaLink | null> {
+  try {
+    const blob = await dataUrlToBlob(dataUrl);
+    return uploadBlobForHostedLink(blob, fileName || "attachment");
   } catch (error) {
     console.error("Failed to migrate legacy data URL link:", error);
     return null;
@@ -1097,7 +1292,7 @@ export function ChatInterface() {
 
   const handleLegacyFileLinkClick = useCallback(async (message: ChatMessage, link: UploadedMediaLink) => {
     if (!isDataUrl(link.url)) {
-      triggerFileOpenOrDownload(link.url, link.name);
+      await triggerFileOpenOrDownload(link.url, link.name);
       return;
     }
 
@@ -1140,23 +1335,68 @@ export function ChatInterface() {
       console.error("Failed to persist migrated file link:", error);
     }
 
-    triggerFileOpenOrDownload(migrated.url, migrated.name || link.name);
+    await triggerFileOpenOrDownload(migrated.url, migrated.name || link.name);
   }, [sessionId, user?.uid, isDraftSessionId]);
 
-  const handleAttachmentFallbackClick = useCallback(async (attachment: FileAttachment) => {
+  const handleAttachmentFallbackClick = useCallback(async (message: ChatMessage, attachment: FileAttachment) => {
+    setChatError(null);
+
     try {
-      const blob = await attachmentToBlobForDownload(attachment);
+      let blob = await attachmentToBlobForDownload(attachment);
+      let fileName = attachment.name;
+
       if (!blob) {
-        setChatError("This file does not have a hosted URL in history. Please re-upload it to get a permanent link.");
+        const pickedFile = await promptForAttachmentFile();
+        if (!pickedFile) {
+          setChatError("This history item only has metadata. Select the original file to restore a permanent link.");
+          return;
+        }
+
+        blob = pickedFile;
+        fileName = pickedFile.name;
+      }
+
+      const hostedLink = await uploadBlobForHostedLink(blob, fileName);
+
+      if (hostedLink) {
+        const existingFileLinks = message.fileLinks || [];
+        const nextFileLinks = [
+          ...existingFileLinks.filter((candidate) => candidate.url !== hostedLink.url),
+          hostedLink,
+        ];
+
+        setMessages((prev) =>
+          prev.map((candidate) =>
+            candidate.id === message.id
+              ? {
+                  ...candidate,
+                  fileLinks: nextFileLinks,
+                }
+              : candidate
+          )
+        );
+
+        if (sessionId && user?.uid && !isDraftSessionId(sessionId)) {
+          try {
+            await updateSessionUserMessageLinks(sessionId, user.uid, message.id, {
+              fileLinks: nextFileLinks,
+            });
+          } catch (persistError) {
+            console.error("Failed to persist recovered file link:", persistError);
+          }
+        }
+
+        await triggerFileOpenOrDownload(hostedLink.url, hostedLink.name || fileName);
         return;
       }
 
-      triggerBlobDownloadOrOpen(blob, attachment.name);
+      triggerBlobDownloadOrOpen(blob, fileName);
+      setChatError("Could not create a permanent hosted URL, but the file was opened locally.");
     } catch (error) {
       console.error("Failed to open local attachment fallback:", error);
       setChatError("Could not open this file. Please re-upload it.");
     }
-  }, []);
+  }, [sessionId, user?.uid, isDraftSessionId]);
 
   const openRunner = useCallback((language: string, value: string) => {
     const normalized = language.toLowerCase();
@@ -2286,7 +2526,7 @@ function MessageBubble({
   onRunCode: (language: string, value: string) => void;
   onSendToPlayground: (language: string, value: string) => void;
   onLegacyFileLinkClick: (message: ChatMessage, link: UploadedMediaLink) => Promise<void>;
-  onAttachmentFallbackClick: (attachment: FileAttachment) => Promise<void>;
+  onAttachmentFallbackClick: (message: ChatMessage, attachment: FileAttachment) => Promise<void>;
 }) {
   const isUser = message.role === "user";
 
@@ -2377,7 +2617,7 @@ function MessageBubble({
                   key={attachment.id}
                   type="button"
                   onClick={() => {
-                    void onAttachmentFallbackClick(attachment);
+                    void onAttachmentFallbackClick(message, attachment);
                   }}
                   className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-secondary/60 hover:bg-secondary/80 text-xs text-muted-foreground hover:text-foreground transition-colors border border-border/30"
                 >

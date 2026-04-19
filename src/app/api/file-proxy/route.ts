@@ -8,6 +8,12 @@ const ALLOWED_HOSTS = new Set([
   "tmpfiles.org",
 ]);
 
+const INTERNAL_FETCH_ALLOWED_HOSTS = new Set([
+  "res.cloudinary.com",
+  "api.cloudinary.com",
+  "tmpfiles.org",
+]);
+
 function sanitizeFilename(rawName: string | null): string {
   const fallback = "attachment";
   if (!rawName || rawName.trim().length === 0) return fallback;
@@ -49,6 +55,7 @@ function buildCloudinaryRawFallbackUrl(source: URL): string | null {
 }
 
 function parseCloudinaryAssetFromUrl(source: URL): {
+  cloudName: string;
   resourceType: "image" | "raw" | "video";
   deliveryType: string;
   publicId: string;
@@ -72,13 +79,27 @@ function parseCloudinaryAssetFromUrl(source: URL): {
   if (publicIdSegments.length === 0) return null;
 
   return {
+    cloudName: segments[0],
     resourceType,
     deliveryType,
     publicId: decodeURIComponent(publicIdSegments.join("/")),
   };
 }
 
-function buildCloudinarySignedUrl(source: URL): string | null {
+function splitCloudinaryPublicId(parsedPublicId: string): { publicId: string; format?: string } {
+  const trimmed = parsedPublicId.trim();
+  const lastDot = trimmed.lastIndexOf(".");
+  if (lastDot <= 0 || lastDot === trimmed.length - 1) {
+    return { publicId: trimmed };
+  }
+
+  return {
+    publicId: trimmed.slice(0, lastDot),
+    format: trimmed.slice(lastDot + 1),
+  };
+}
+
+function buildCloudinarySignedUrl(source: URL, overrideType?: string): string | null {
   const parsed = parseCloudinaryAssetFromUrl(source);
   if (!parsed) return null;
 
@@ -91,13 +112,104 @@ function buildCloudinarySignedUrl(source: URL): string | null {
   try {
     return cloudinary.url(parsed.publicId, {
       resource_type: parsed.resourceType,
-      type: parsed.deliveryType,
+      type: overrideType || parsed.deliveryType,
       secure: true,
       sign_url: true,
     });
   } catch {
     return null;
   }
+}
+
+function buildCloudinaryPrivateDownloadUrl(source: URL, overrideType?: string): string | null {
+  const parsed = parseCloudinaryAssetFromUrl(source);
+  if (!parsed) return null;
+
+  try {
+    assertCloudinaryConfigured();
+  } catch {
+    return null;
+  }
+
+  try {
+    const split = splitCloudinaryPublicId(parsed.publicId);
+    const downloadUrl = cloudinary.utils.private_download_url(split.publicId, split.format, {
+      resource_type: parsed.resourceType,
+      type: overrideType || parsed.deliveryType,
+      expires_at: Math.floor(Date.now() / 1000) + 60 * 5,
+      attachment: false,
+    });
+
+    return typeof downloadUrl === "string" ? downloadUrl : null;
+  } catch {
+    return null;
+  }
+}
+
+function canFetchInternalCandidate(candidate: string): boolean {
+  try {
+    const parsed = new URL(candidate);
+    return parsed.protocol === "https:" && INTERNAL_FETCH_ALLOWED_HOSTS.has(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function buildCloudinaryFetchCandidates(source: URL): string[] {
+  const candidates: string[] = [source.toString()];
+
+  const rawFallback = buildCloudinaryRawFallbackUrl(source);
+  if (rawFallback) {
+    candidates.push(rawFallback);
+  }
+
+  const signedCurrentType = buildCloudinarySignedUrl(source);
+  if (signedCurrentType) {
+    candidates.push(signedCurrentType);
+  }
+
+  const signedAuthenticated = buildCloudinarySignedUrl(source, "authenticated");
+  if (signedAuthenticated) {
+    candidates.push(signedAuthenticated);
+  }
+
+  const signedPrivate = buildCloudinarySignedUrl(source, "private");
+  if (signedPrivate) {
+    candidates.push(signedPrivate);
+  }
+
+  const privateDownloadCurrentType = buildCloudinaryPrivateDownloadUrl(source);
+  if (privateDownloadCurrentType) {
+    candidates.push(privateDownloadCurrentType);
+  }
+
+  const privateDownloadAuthenticated = buildCloudinaryPrivateDownloadUrl(source, "authenticated");
+  if (privateDownloadAuthenticated) {
+    candidates.push(privateDownloadAuthenticated);
+  }
+
+  const privateDownloadPrivate = buildCloudinaryPrivateDownloadUrl(source, "private");
+  if (privateDownloadPrivate) {
+    candidates.push(privateDownloadPrivate);
+  }
+
+  return [...new Set(candidates)].filter(canFetchInternalCandidate);
+}
+
+async function fetchFirstWorkingCandidate(candidates: string[]): Promise<Response | null> {
+  for (const candidate of candidates) {
+    const response = await fetch(candidate, {
+      method: "GET",
+      redirect: "follow",
+      cache: "no-store",
+    });
+
+    if (response.ok && response.body) {
+      return response;
+    }
+  }
+
+  return null;
 }
 
 export async function GET(request: NextRequest) {
@@ -131,49 +243,29 @@ export async function GET(request: NextRequest) {
     const fileName = sanitizeFilename(rawName);
     const disposition = dispositionParam === "inline" ? "inline" : "attachment";
 
-    let upstream = await fetch(parsed.toString(), {
-      method: "GET",
-      redirect: "follow",
-      cache: "no-store",
-    });
+    const isCloudinarySource = parsed.hostname === "res.cloudinary.com";
+    const candidates = isCloudinarySource
+      ? buildCloudinaryFetchCandidates(parsed)
+      : [parsed.toString()];
 
-    if (!upstream.ok || !upstream.body) {
-      const fallbackUrl = buildCloudinaryRawFallbackUrl(parsed);
-      if (fallbackUrl) {
-        const fallbackResponse = await fetch(fallbackUrl, {
-          method: "GET",
-          redirect: "follow",
-          cache: "no-store",
-        });
+    const upstream = await fetchFirstWorkingCandidate(candidates);
 
-        if (fallbackResponse.ok && fallbackResponse.body) {
-          upstream = fallbackResponse;
-        }
-      }
-    }
+    if (!upstream || !upstream.ok || !upstream.body) {
+      // Best-effort final probe so the caller gets actionable diagnostics.
+      const finalProbe = await fetch(parsed.toString(), {
+        method: "GET",
+        redirect: "follow",
+        cache: "no-store",
+      });
 
-    if ((!upstream.ok || !upstream.body) && (upstream.status === 401 || upstream.status === 403)) {
-      const signedUrl = buildCloudinarySignedUrl(parsed);
-      if (signedUrl) {
-        const signedResponse = await fetch(signedUrl, {
-          method: "GET",
-          redirect: "follow",
-          cache: "no-store",
-        });
-
-        if (signedResponse.ok && signedResponse.body) {
-          upstream = signedResponse;
-        }
-      }
-    }
-
-    if (!upstream.ok || !upstream.body) {
-      const upstreamStatus = upstream.status;
+      const upstreamStatus = finalProbe.status;
+      const upstreamError = finalProbe.headers.get("x-cld-error") || undefined;
       return NextResponse.json(
         {
-          error: `Failed to fetch remote file (status ${upstream.status})`,
+          error: `Failed to fetch remote file (status ${finalProbe.status})`,
           upstreamStatus,
-          upstreamStatusText: upstream.statusText,
+          upstreamStatusText: finalProbe.statusText,
+          upstreamError,
         },
         { status: upstreamStatus === 401 || upstreamStatus === 403 ? upstreamStatus : 502 }
       );

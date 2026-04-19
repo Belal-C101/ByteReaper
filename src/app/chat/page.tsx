@@ -287,9 +287,13 @@ function UnlockModal({
 function NewConversationModal({
   onClose,
   onStartChat,
+  creating,
+  startChatError,
 }: {
   onClose: () => void;
   onStartChat: (peerUid: string) => void;
+  creating?: boolean;
+  startChatError?: string | null;
 }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [results, setResults] = useState<
@@ -368,20 +372,34 @@ function NewConversationModal({
         </div>
 
         <div className="max-h-[300px] overflow-y-auto">
+          {creating && (
+            <div className="flex items-center justify-center gap-2 py-8">
+              <Loader2 className="h-5 w-5 animate-spin text-primary" />
+              <span className="text-sm text-muted-foreground">Starting conversation...</span>
+            </div>
+          )}
+
+          {!creating && startChatError && (
+            <div className="mx-4 my-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-600 dark:text-red-400">
+              <p className="font-medium">Failed to start chat</p>
+              <p className="opacity-90 break-words mt-1">{startChatError}</p>
+            </div>
+          )}
+
           {searching && (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
           )}
 
-          {!searching && searchError && (
+          {!searching && !creating && searchError && (
             <div className="mx-4 my-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-600 dark:text-red-400">
               <p className="font-medium">Search failed</p>
               <p className="opacity-90 break-words mt-1">{searchError}</p>
             </div>
           )}
 
-          {!searching && !searchError && results.length === 0 && searchQuery.length >= 2 && (
+          {!searching && !creating && !searchError && results.length === 0 && searchQuery.length >= 2 && (
             <div className="text-center py-8 px-6 text-sm text-muted-foreground">
               <p className="font-medium mb-1">No users found</p>
               <p className="text-xs opacity-75">
@@ -391,7 +409,7 @@ function NewConversationModal({
             </div>
           )}
 
-          {!searching &&
+          {!searching && !creating &&
             results.map((r) => (
               <button
                 key={r.uid}
@@ -568,6 +586,8 @@ export default function PrivateChatPage() {
   const [showNewConv, setShowNewConv] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
   const [callStatus, setCallStatus] = useState<{ peerName: string; status: "ringing" | "connected" } | null>(null);
+  const [startChatError, setStartChatError] = useState<string | null>(null);
+  const [creatingChat, setCreatingChat] = useState(false);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -618,32 +638,43 @@ export default function PrivateChatPage() {
     if (!user || !privateKey) return;
     const q = query(
       collection(db, "conversations"),
-      where("participants", "array-contains", user.uid),
-      orderBy("lastMessageAt", "desc")
+      where("participants", "array-contains", user.uid)
     );
-    const unsub = onSnapshot(q, (snap) => {
-      const convs = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Conversation));
-      setConversations(convs);
-
-      // Load peer profiles
-      const peerUids = new Set<string>();
-      convs.forEach((c) =>
-        c.participants.forEach((p) => {
-          if (p !== user.uid) peerUids.add(p);
-        })
-      );
-      peerUids.forEach((uid) => {
-        setPeerProfiles((prev) => {
-          if (prev[uid]) return prev;
-          getDocs(query(collection(db, "user_profiles"), where("uid", "==", uid), limit(1))).then((snap) => {
-            if (!snap.empty) {
-              setPeerProfiles((p) => ({ ...p, [uid]: snap.docs[0].data() as UserProfile }));
-            }
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const convs = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as Conversation))
+          .sort((a, b) => {
+            const aTime = a.lastMessageAt instanceof Timestamp ? a.lastMessageAt.toMillis() : 0;
+            const bTime = b.lastMessageAt instanceof Timestamp ? b.lastMessageAt.toMillis() : 0;
+            return bTime - aTime;
           });
-          return prev;
+        setConversations(convs);
+
+        // Load peer profiles
+        const peerUids = new Set<string>();
+        convs.forEach((c) =>
+          c.participants.forEach((p) => {
+            if (p !== user.uid) peerUids.add(p);
+          })
+        );
+        peerUids.forEach((uid) => {
+          setPeerProfiles((prev) => {
+            if (prev[uid]) return prev;
+            getDocs(query(collection(db, "user_profiles"), where("uid", "==", uid), limit(1))).then((snap) => {
+              if (!snap.empty) {
+                setPeerProfiles((p) => ({ ...p, [uid]: snap.docs[0].data() as UserProfile }));
+              }
+            });
+            return prev;
+          });
         });
-      });
-    });
+      },
+      (err) => {
+        console.error("Conversations listener error:", err);
+      }
+    );
     return unsub;
   }, [user, privateKey]);
 
@@ -655,14 +686,20 @@ export default function PrivateChatPage() {
       collection(db, "conversations", activeConvId, "messages"),
       orderBy("createdAt", "asc")
     );
-    const unsub = onSnapshot(q, (snap) => {
-      const msgs = snap.docs.map((d) => ({ id: d.id, ...d.data() } as ChatMessage));
-      setMessages(msgs);
-      // Scroll to bottom
-      setTimeout(() => {
-        virtuosoRef.current?.scrollToIndex({ index: msgs.length - 1, behavior: "smooth" });
-      }, 100);
-    });
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const msgs = snap.docs.map((d) => ({ id: d.id, ...d.data() } as ChatMessage));
+        setMessages(msgs);
+        // Scroll to bottom
+        setTimeout(() => {
+          virtuosoRef.current?.scrollToIndex({ index: msgs.length - 1, behavior: "smooth" });
+        }, 100);
+      },
+      (err) => {
+        console.error("Messages listener error:", err);
+      }
+    );
 
     // Reset unread
     updateDoc(doc(db, "conversations", activeConvId), {
@@ -725,10 +762,14 @@ export default function PrivateChatPage() {
 
   const handleStartChat = async (peerUid: string) => {
     if (!user || !privateKey || !profile) return;
+    setStartChatError(null);
+    setCreatingChat(true);
     setShowNewConv(false);
 
     try {
       const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error("Not signed in");
+
       const res = await fetch("/api/conversations", {
         method: "POST",
         headers: {
@@ -739,7 +780,7 @@ export default function PrivateChatPage() {
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      if (!res.ok) throw new Error(data.error || `Failed (${res.status})`);
 
       // If this is a new conversation (has conversationKey), wrap keys
       if (data.conversationKey) {
@@ -760,6 +801,10 @@ export default function PrivateChatPage() {
       setShowSidebar(false);
     } catch (err) {
       console.error("Start chat error:", err);
+      setStartChatError(err instanceof Error ? err.message : "Failed to start chat");
+      setShowNewConv(true);
+    } finally {
+      setCreatingChat(false);
     }
   };
 
@@ -1033,8 +1078,10 @@ export default function PrivateChatPage() {
       <AnimatePresence>
         {showNewConv && (
           <NewConversationModal
-            onClose={() => setShowNewConv(false)}
+            onClose={() => { setShowNewConv(false); setStartChatError(null); }}
             onStartChat={handleStartChat}
+            creating={creatingChat}
+            startChatError={startChatError}
           />
         )}
       </AnimatePresence>

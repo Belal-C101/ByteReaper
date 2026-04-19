@@ -133,6 +133,10 @@ function buildCloudinaryPrivateDownloadUrl(source: URL, overrideType?: string): 
 
   try {
     const split = splitCloudinaryPublicId(parsed.publicId);
+    if (!split.format) {
+      return null;
+    }
+
     const downloadUrl = cloudinary.utils.private_download_url(split.publicId, split.format, {
       resource_type: parsed.resourceType,
       type: overrideType || parsed.deliveryType,

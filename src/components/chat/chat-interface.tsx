@@ -80,8 +80,9 @@ import {
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { uploadToCloudinary } from "@/lib/cloudinary-upload";
 
-const MAX_ATTACHMENT_SIZE_BYTES = 900 * 1024;
+const MAX_ATTACHMENT_SIZE_BYTES = 20 * 1024 * 1024;
 const MAX_ATTACHMENTS_PER_MESSAGE = 1;
 const DRAFT_CHAT_ID_PREFIX = "draft-chat-";
 const EMPTY_STATE_PROMPTS = [
@@ -270,6 +271,76 @@ const EXTENSION_MIME_MAP: Record<string, string> = {
   avi: "video/x-msvideo",
 };
 
+const IMAGE_UPLOAD_EXTENSIONS = new Set([
+  "jpg",
+  "jpeg",
+  "png",
+  "gif",
+  "webp",
+  "svg",
+  "bmp",
+  "ico",
+  "avif",
+  "heic",
+]);
+
+const CODE_AND_DOC_UPLOAD_EXTENSIONS = new Set([
+  "js",
+  "ts",
+  "jsx",
+  "tsx",
+  "py",
+  "java",
+  "cpp",
+  "c",
+  "h",
+  "go",
+  "rs",
+  "rb",
+  "php",
+  "md",
+  "markdown",
+  "txt",
+  "json",
+  "yaml",
+  "yml",
+  "sql",
+  "sh",
+  "bash",
+  "csv",
+  "xml",
+  "html",
+  "css",
+]);
+
+const ALLOWED_UPLOAD_EXTENSIONS = new Set([
+  ...Array.from(IMAGE_UPLOAD_EXTENSIONS),
+  ...Array.from(CODE_AND_DOC_UPLOAD_EXTENSIONS),
+]);
+
+const ALLOWED_UPLOAD_MIME_TYPES = new Set([
+  "application/json",
+  "application/xml",
+  "application/x-yaml",
+  "application/yaml",
+  "application/pdf",
+  "application/sql",
+  "application/x-sh",
+  "application/x-httpd-php",
+  "text/javascript",
+  "text/typescript",
+  "text/x-python",
+  "text/x-java-source",
+  "text/x-c",
+  "text/x-c++src",
+  "text/x-go",
+  "text/rust",
+  "text/x-ruby",
+]);
+
+const SUPPORTED_UPLOAD_FILES_HINT =
+  "Supported files include source files (.js, .ts, .py, .java, .cpp, .go, .rs, .rb, .php), text/docs, and images.";
+
 function resolveMimeType(file: FileLike): string {
   if (typeof file.type === "string" && file.type.trim().length > 0) {
     return file.type;
@@ -279,51 +350,19 @@ function resolveMimeType(file: FileLike): string {
   return EXTENSION_MIME_MAP[ext] || "application/octet-stream";
 }
 
-function normalizeUploadedMediaLinks(rawLinks: any[] | undefined): UploadedMediaLink[] {
-  if (!Array.isArray(rawLinks)) return [];
-
-  return rawLinks
-    .map((link) => ({
-      url: typeof link?.url === "string" ? link.url.trim() : "",
-      name: typeof link?.name === "string" && link.name.trim().length > 0 ? link.name.trim() : "Attachment",
-      provider: typeof link?.provider === "string" ? link.provider : undefined,
-    }))
-    .filter((link) => link.url.length > 0);
+function getLowercaseExtension(name: string): string {
+  return name.split(".").pop()?.toLowerCase() || "";
 }
 
-function buildAttachmentMediaLinks(
-  sourceAttachments: FileAttachment[],
-  uploadedImages: UploadedMediaLink[],
-  uploadedFiles: UploadedMediaLink[]
-): { imageLinks: UploadedMediaLink[]; fileLinks: UploadedMediaLink[]; missingCount: number; unlinkedAttachments: FileAttachment[] } {
-  const remainingImages = [...uploadedImages];
-  const remainingFiles = [...uploadedFiles];
-  const imageLinks: UploadedMediaLink[] = [];
-  const fileLinks: UploadedMediaLink[] = [];
-  const unlinkedAttachments: FileAttachment[] = [];
-  let missingCount = 0;
+function isAllowedUploadFile(file: FileLike): boolean {
+  const ext = getLowercaseExtension(file.name);
+  const mimeType = resolveMimeType(file).toLowerCase();
 
-  sourceAttachments.forEach((attachment) => {
-    const attachmentType = getFileType({ name: attachment.name, type: attachment.type });
-    const isImageAttachment = attachmentType === "image";
-    const pool = isImageAttachment ? remainingImages : remainingFiles;
-
-    const exactIndex = pool.findIndex((link) => link.name === attachment.name);
-    const pickedIndex = exactIndex >= 0 ? exactIndex : pool.findIndex((link) => Boolean(link.url));
-
-    if (pickedIndex >= 0) {
-      const [pickedLink] = pool.splice(pickedIndex, 1);
-      if (isImageAttachment) imageLinks.push(pickedLink);
-      else fileLinks.push(pickedLink);
-      return;
-    }
-
-    unlinkedAttachments.push(attachment);
-    missingCount += 1;
-  });
-
-  return { imageLinks, fileLinks, missingCount, unlinkedAttachments };
+  if (ALLOWED_UPLOAD_EXTENSIONS.has(ext)) return true;
+  if (mimeType.startsWith("image/") || mimeType.startsWith("text/")) return true;
+  return ALLOWED_UPLOAD_MIME_TYPES.has(mimeType);
 }
+
 function getFileType(file: FileLike): "code" | "image" | "text" | "other" {
   const ext = file.name.split(".").pop()?.toLowerCase() || "";
   const mimeType = resolveMimeType(file);
@@ -577,24 +616,45 @@ async function attachmentToBlobForDownload(attachment: FileAttachment): Promise<
   });
 }
 
-async function uploadBlobForHostedLink(blob: Blob, fileName: string, token?: string): Promise<UploadedMediaLink | null> {
+async function attachmentToUploadFile(attachment: FileAttachment): Promise<File | null> {
+  if (!attachment.content) return null;
+
+  if (attachment.content.startsWith("data:")) {
+    const blob = await dataUrlToBlob(attachment.content);
+    return new File([blob], attachment.name || "attachment", {
+      type: blob.type || resolveMimeType({ name: attachment.name, type: attachment.type }),
+    });
+  }
+
+  const mimeType = resolveMimeType({ name: attachment.name, type: attachment.type });
+  return new File([attachment.content], attachment.name || "attachment", { type: mimeType });
+}
+
+async function uploadBlobForHostedLink(
+  blob: Blob,
+  fileName: string,
+  _token?: string,
+  onProgress?: (pct: number) => void
+): Promise<UploadedMediaLink | null> {
   try {
-    const formData = new FormData();
-    formData.append("files", blob, fileName || "attachment");
+    const effectiveType = blob.type || resolveMimeType({ name: fileName });
 
-    const headers: Record<string, string> = {};
-    if (token) headers["Authorization"] = `Bearer ${token}`;
+    if (blob.size > MAX_ATTACHMENT_SIZE_BYTES) {
+      throw new Error(`"${fileName}" is too large. Keep files under 20MB.`);
+    }
 
-    const uploadRes = await fetch("/api/upload", { method: "POST", body: formData, headers });
-    if (!uploadRes.ok) return null;
+    if (!isAllowedUploadFile({ name: fileName, type: effectiveType })) {
+      throw new Error(`"${fileName}" is not a supported file type. ${SUPPORTED_UPLOAD_FILES_HINT}`);
+    }
 
-    const uploadData = await uploadRes.json();
-    const normalizedImages = normalizeUploadedMediaLinks(uploadData.images);
-    const normalizedFiles = normalizeUploadedMediaLinks(uploadData.files);
-    const candidates = [...normalizedImages, ...normalizedFiles];
+    const uploadFile = new File([blob], fileName || "attachment", { type: effectiveType });
+    const uploaded = await uploadToCloudinary(uploadFile, onProgress);
 
-    const matched = candidates.find((candidate) => candidate.name === fileName);
-    return matched || candidates[0] || null;
+    return {
+      url: uploaded.secureUrl || uploaded.url,
+      name: fileName || uploaded.originalFilename || "attachment",
+      provider: "cloudinary",
+    };
   } catch (error) {
     console.error("Failed to upload blob for hosted link:", error);
     return null;
@@ -772,6 +832,7 @@ export function ChatInterface() {
   const [featureCodeReview, setFeatureCodeReview] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgressPct, setUploadProgressPct] = useState(0);
   const [promptTemplates, setPromptTemplates] = useState<string[]>([]);
   const [promptMenuOpen, setPromptMenuOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
@@ -1192,9 +1253,15 @@ export function ChatInterface() {
     for (const file of filesToProcess) {
       try {
         if (file.size > MAX_ATTACHMENT_SIZE_BYTES) {
-          setChatError(`"${file.name}" is too large. Keep files under ${Math.round(MAX_ATTACHMENT_SIZE_BYTES / 1024)}KB.`);
+          setChatError(`"${file.name}" is too large. Keep files under 20MB.`);
           continue;
         }
+
+        if (!isAllowedUploadFile(file)) {
+          setChatError(`"${file.name}" is not a supported file type. ${SUPPORTED_UPLOAD_FILES_HINT}`);
+          continue;
+        }
+
         const fileType = getFileType(file);
         let content: string | undefined;
         let preview: string | undefined;
@@ -1588,86 +1655,69 @@ export function ChatInterface() {
     let modelUsedForExchange = selectedModel;
     const needsNewSession = !sessionId || isDraftSessionId(sessionId);
 
-    // Upload attachments to Cloudinary (with tmpfiles fallback) in background
+    // Upload attachments directly to Cloudinary from the browser.
     let uploadedImageLinks: UploadedMediaLink[] = [];
     let uploadedFileLinks: UploadedMediaLink[] = [];
 
     if (attachments.length > 0) {
       setIsUploading(true);
+      setUploadProgressPct(0);
       try {
-        const formData = new FormData();
-        for (const att of attachments) {
-          if (att.content) {
-            let blob: Blob;
-            if (att.content.startsWith('data:')) {
-              try {
-                // Robust dataURL to Blob (avoids browser fetch URL length limits)
-                const arr = att.content.split(',');
-                const mimeMatch = arr[0].match(/:(.*?);/);
-                const mime = mimeMatch ? mimeMatch[1] : (att.type || 'application/octet-stream');
-                const bstr = atob(arr[1]);
-                let n = bstr.length;
-                const u8arr = new Uint8Array(n);
-                while (n--) {
-                  u8arr[n] = bstr.charCodeAt(n);
-                }
-                blob = new Blob([u8arr], { type: mime });
-              } catch (e) {
-                // Fallback
-                const resp = await fetch(att.content);
-                blob = await resp.blob();
-              }
-            } else {
-              // Raw text content
-              blob = new Blob([att.content], { type: att.type || 'text/plain' });
-            }
-            formData.append('files', blob, att.name);
+        const totalUploadBytes = attachments.reduce(
+          (sum, attachment) => sum + Math.max(attachment.size, 1),
+          0
+        );
+        let uploadedBytes = 0;
+
+        for (const attachment of attachments) {
+          if (attachment.size > MAX_ATTACHMENT_SIZE_BYTES) {
+            throw new Error(`"${attachment.name}" is too large. Keep files under 20MB.`);
           }
-        }
 
-        const uploadController = new AbortController();
-        const uploadTimeout = window.setTimeout(() => uploadController.abort(), 60_000);
-
-        const uploadToken = user ? await user.getIdToken() : undefined;
-        const uploadRes = await fetch('/api/upload', {
-          method: 'POST',
-          body: formData,
-          signal: uploadController.signal,
-          headers: uploadToken ? { Authorization: `Bearer ${uploadToken}` } : {},
-        }).finally(() => {
-          window.clearTimeout(uploadTimeout);
-        });
-
-        const uploadData = await uploadRes.json().catch(() => ({} as Record<string, unknown>));
-
-        if (uploadRes.ok && uploadData?.success) {
-          const normalizedImages = normalizeUploadedMediaLinks(uploadData.images);
-          const normalizedFiles = normalizeUploadedMediaLinks(uploadData.files);
-
-          const linkSet = buildAttachmentMediaLinks(attachments, normalizedImages, normalizedFiles);
-          uploadedImageLinks = linkSet.imageLinks;
-          uploadedFileLinks = linkSet.fileLinks;
-
-          const uploadErrors = Array.isArray(uploadData.errors) ? uploadData.errors : [];
-          console.info('[Upload] OK — images:', uploadedImageLinks.length, 'files:', uploadedFileLinks.length,
-            'providers:', [...uploadedImageLinks, ...uploadedFileLinks].map(l => l.provider).join(',') || 'none',
-            'errors:', uploadErrors.length);
-
-          if (uploadErrors.length > 0) {
-            console.warn('[Upload] partial failures:', uploadErrors);
+          if (!isAllowedUploadFile({ name: attachment.name, type: attachment.type })) {
+            throw new Error(`"${attachment.name}" is not a supported file type. ${SUPPORTED_UPLOAD_FILES_HINT}`);
           }
-        } else {
-          const reason = uploadData?.errors?.[0]?.reason || uploadData?.message || uploadData?.error || `HTTP ${uploadRes.status}`;
-          throw new Error(reason as string);
+
+          const uploadFile = await attachmentToUploadFile(attachment);
+          if (!uploadFile) {
+            throw new Error(`"${attachment.name}" has no readable content to upload.`);
+          }
+
+          const uploadSize = Math.max(uploadFile.size || attachment.size, 1);
+          const uploaded = await uploadToCloudinary(uploadFile, (pct) => {
+            if (totalUploadBytes <= 0) return;
+            const currentFileBytes = Math.round((uploadSize * pct) / 100);
+            const overallBytes = Math.min(uploadedBytes + currentFileBytes, totalUploadBytes);
+            setUploadProgressPct(Math.round((overallBytes / totalUploadBytes) * 100));
+          });
+
+          const nextLink: UploadedMediaLink = {
+            url: uploaded.secureUrl || uploaded.url,
+            name: attachment.name,
+            provider: "cloudinary",
+          };
+
+          if (getFileType({ name: attachment.name, type: attachment.type }) === "image") {
+            uploadedImageLinks.push(nextLink);
+          } else {
+            uploadedFileLinks.push(nextLink);
+          }
+
+          uploadedBytes += uploadSize;
+          if (totalUploadBytes > 0) {
+            setUploadProgressPct(Math.round((uploadedBytes / totalUploadBytes) * 100));
+          }
         }
       } catch (uploadErr) {
         console.error('[Upload] FAILED:', uploadErr);
-        setChatError(`File upload failed: ${uploadErr instanceof Error ? uploadErr.message : 'unknown error'}. Please retry.`);
+        setChatError(`File upload failed: ${uploadErr instanceof Error ? uploadErr.message : 'unknown error'}`);
         setIsUploading(false);
+        setUploadProgressPct(0);
         setIsLoading(false);
         return; // ABORT — do not send message with no links
       } finally {
         setIsUploading(false);
+        setUploadProgressPct(0);
       }
     }
 
@@ -2576,7 +2626,7 @@ export function ChatInterface() {
                 <div className="flex items-center gap-2">
                   {isUploading && (
                     <span className="text-[10px] text-primary/60 flex items-center gap-1">
-                      <Loader2 className="h-3 w-3 animate-spin" /> Uploading...
+                      <Loader2 className="h-3 w-3 animate-spin" /> Uploading {uploadProgressPct}%
                     </span>
                   )}
                   <p className="text-[10px] text-muted-foreground/40 hidden sm:block">Shift+Enter for new line</p>

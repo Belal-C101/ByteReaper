@@ -112,8 +112,12 @@ Open [http://localhost:3000](http://localhost:3000) and create an account!
 |----------|----------|-------------|
 | `OPENROUTER_API_KEY` | Yes | OpenRouter API key ([Get free key](https://openrouter.ai/keys)) |
 | `GITHUB_TOKEN` | No | GitHub Personal Access Token (increases rate limits) |
+| `NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME` | Yes (for uploads) | Cloudinary cloud name used for direct browser uploads |
+| `NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET` | Yes (for uploads) | Cloudinary unsigned upload preset |
 
 **Note:** Firebase configuration is stored in `src/lib/firebase.ts` (not in .env)
+
+For production on Netlify, add both Cloudinary variables in Site settings -> Environment variables.
 
 ---
 
@@ -152,8 +156,22 @@ The `setup-firebase.js` script automatically:
 
 ### File Upload
 - Drag and drop files into the chat
-- Supports: .js, .ts, .py, .java, .cpp, .go, .rs, .rb, .php, and more
+- Supports: .js, .ts, .py, .java, .cpp, .go, .rs, .rb, .php, text/docs, and images
+- Max upload size: 20MB per file
+- Uploads go directly from browser to Cloudinary (unsigned preset), so they do not pass through Netlify functions
 - Image support for diagrams and screenshots
+
+---
+
+## ☁️ Cloudinary Setup
+
+1. Create a free Cloudinary account.
+2. Go to **Settings -> Upload**.
+3. Create an upload preset with **Signing Mode = Unsigned**.
+4. Copy your **Cloud name** and the **upload preset name**.
+5. Set these in local development (`.env.local`) and Netlify env vars:
+  - `NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME`
+  - `NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET`
 
 ### Model Selection
 - Click the model selector in the top-right of the chat

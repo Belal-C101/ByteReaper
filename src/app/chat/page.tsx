@@ -44,6 +44,7 @@ import type { IAgoraRTCClient, IMicrophoneAudioTrack, IRemoteAudioTrack } from "
 import {
   encryptMessage,
   decryptMessage,
+  generateConversationKey,
   wrapKeyForPeer,
   unwrapKey,
   generateIdentity,
@@ -681,7 +682,7 @@ export default function PrivateChatPage() {
       }).catch((err) => {
         console.error("[ByteReaper] updateLastSeen:error", err);
       });
-    }, 60_000);
+    }, 300_000);
     return () => clearInterval(interval);
   }, [user, profile]);
 
@@ -820,42 +821,93 @@ export default function PrivateChatPage() {
       throw new Error("Conversation participant data is invalid.");
     }
 
-    const token = await auth.currentUser?.getIdToken();
-    if (!token) {
-      throw new Error("Not signed in.");
-    }
+    const resolvePeerPublicKey = async (): Promise<string> => {
+      const cachedPeerPublicKey = peerProfiles[peerUid]?.publicKey;
+      if (cachedPeerPublicKey) return cachedPeerPublicKey;
+
+      const peerSnap = await getDocs(
+        query(collection(db, "user_profiles"), where("uid", "==", peerUid), limit(1))
+      );
+
+      if (peerSnap.empty) {
+        throw new Error("Peer profile not found. Ask the other user to complete private chat setup.");
+      }
+
+      const peerData = peerSnap.docs[0].data() as UserProfile;
+      if (!peerData.publicKey) {
+        throw new Error("Peer encryption key is missing. Ask the other user to re-setup private chat.");
+      }
+
+      return peerData.publicKey;
+    };
+
+    const localBootstrap = async () => {
+      const peerPublicKey = await resolvePeerPublicKey();
+      const rawKey = await generateConversationKey();
+      const myWrapped = await wrapKeyForPeer(rawKey, fromBase64(profile.publicKey));
+      const peerWrapped = await wrapKeyForPeer(rawKey, fromBase64(peerPublicKey));
+
+      await updateDoc(doc(db, "conversations", conversationId), {
+        [`wrappedKeys.${user.uid}`]: myWrapped,
+        [`wrappedKeys.${peerUid}`]: peerWrapped,
+      });
+
+      setConvKeyCache((prev) => ({ ...prev, [conversationId]: rawKey }));
+      privateDebugLog("resolveConversationKey:bootstrap:local-success", { conversationId, peerUid });
+      return rawKey;
+    };
 
     privateDebugLog("resolveConversationKey:bootstrap:start", { conversationId, peerUid });
 
-    const res = await fetch(`/api/conversations/${conversationId}/bootstrap-key`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
+    let remoteBootstrapError: string | null = null;
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) {
+        throw new Error("Not signed in.");
+      }
 
-    const data = await res.json().catch(() => ({} as { error?: string; conversationKey?: string; peerPublicKey?: string }));
-    if (!res.ok) {
-      throw new Error(data.error || `Failed to reinitialize conversation key (HTTP ${res.status})`);
+      const res = await fetch(`/api/conversations/${conversationId}/bootstrap-key`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const data = await res.json().catch(() => ({} as { error?: string; conversationKey?: string; peerPublicKey?: string }));
+      if (!res.ok) {
+        throw new Error(data.error || `Failed to reinitialize conversation key (HTTP ${res.status})`);
+      }
+
+      if (!data.conversationKey || !data.peerPublicKey) {
+        throw new Error("Bootstrap response missing encryption key metadata.");
+      }
+
+      const rawKey = fromBase64(data.conversationKey);
+      const myWrapped = await wrapKeyForPeer(rawKey, fromBase64(profile.publicKey));
+      const peerWrapped = await wrapKeyForPeer(rawKey, fromBase64(data.peerPublicKey));
+
+      await updateDoc(doc(db, "conversations", conversationId), {
+        [`wrappedKeys.${user.uid}`]: myWrapped,
+        [`wrappedKeys.${peerUid}`]: peerWrapped,
+      });
+
+      setConvKeyCache((prev) => ({ ...prev, [conversationId]: rawKey }));
+      privateDebugLog("resolveConversationKey:bootstrap:end", { conversationId, peerUid });
+      return rawKey;
+    } catch (err) {
+      remoteBootstrapError = err instanceof Error ? err.message : "Unknown bootstrap API error";
+      console.warn("[ByteReaper] resolveConversationKey:bootstrap:remote-failed", err);
     }
 
-    if (!data.conversationKey || !data.peerPublicKey) {
-      throw new Error("Bootstrap response missing encryption key metadata.");
+    try {
+      return await localBootstrap();
+    } catch (localErr) {
+      const localReason = localErr instanceof Error ? localErr.message : "Unknown local bootstrap error";
+      throw new Error(
+        `Conversation key recovery failed. Remote: ${remoteBootstrapError || "n/a"}. Local fallback: ${localReason}`
+      );
     }
-
-    const rawKey = fromBase64(data.conversationKey);
-    const myWrapped = await wrapKeyForPeer(rawKey, fromBase64(profile.publicKey));
-    const peerWrapped = await wrapKeyForPeer(rawKey, fromBase64(data.peerPublicKey));
-
-    await updateDoc(doc(db, "conversations", conversationId), {
-      [`wrappedKeys.${user.uid}`]: myWrapped,
-      [`wrappedKeys.${peerUid}`]: peerWrapped,
-    });
-
-    setConvKeyCache((prev) => ({ ...prev, [conversationId]: rawKey }));
-    privateDebugLog("resolveConversationKey:bootstrap:end", { conversationId, peerUid });
-    return rawKey;
-  }, [profile, user]);
+  }, [peerProfiles, profile, user]);
 
   const resolveConversationKey = useCallback(async (conversationId: string) => {
     privateDebugLog("resolveConversationKey:start", { conversationId });
@@ -886,9 +938,10 @@ export default function PrivateChatPage() {
         return await bootstrapConversationKey(conversationId, conversation);
       } catch (bootstrapError) {
         console.error("[ByteReaper] resolveConversationKey:bootstrap-error", bootstrapError);
-        throw new Error(
-          "Conversation key not available for current user. We tried to reinitialize encryption for this chat, but it failed."
-        );
+        if (bootstrapError instanceof Error) {
+          throw new Error(`Conversation key not available for current user. ${bootstrapError.message}`);
+        }
+        throw new Error("Conversation key not available for current user. Recovery failed.");
       }
     }
 

@@ -296,9 +296,11 @@ function NewConversationModal({
     Array<{ uid: string; username: string; displayName: string; email: string; photoURL?: string }>
   >([]);
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
 
   const handleSearch = useCallback(async (q: string) => {
+    setSearchError(null);
     if (q.length < 2) {
       setResults([]);
       return;
@@ -306,12 +308,23 @@ function NewConversationModal({
     setSearching(true);
     try {
       const token = await auth.currentUser?.getIdToken();
+      if (!token) {
+        setSearchError("Not signed in");
+        setResults([]);
+        return;
+      }
       const res = await fetch(`/api/users/search?q=${encodeURIComponent(q)}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setSearchError(data?.error || `Search failed (HTTP ${res.status})`);
+        setResults([]);
+        return;
+      }
       setResults(data.results || []);
-    } catch {
+    } catch (err) {
+      setSearchError(err instanceof Error ? err.message : "Search failed");
       setResults([]);
     } finally {
       setSearching(false);
@@ -361,9 +374,20 @@ function NewConversationModal({
             </div>
           )}
 
-          {!searching && results.length === 0 && searchQuery.length >= 2 && (
-            <div className="text-center py-8 text-sm text-muted-foreground">
-              No users found
+          {!searching && searchError && (
+            <div className="mx-4 my-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-600 dark:text-red-400">
+              <p className="font-medium">Search failed</p>
+              <p className="opacity-90 break-words mt-1">{searchError}</p>
+            </div>
+          )}
+
+          {!searching && !searchError && results.length === 0 && searchQuery.length >= 2 && (
+            <div className="text-center py-8 px-6 text-sm text-muted-foreground">
+              <p className="font-medium mb-1">No users found</p>
+              <p className="text-xs opacity-75">
+                Only users who have completed the private-chat setup (username + E2E password)
+                appear here. Ask them to visit <span className="font-mono">/chat</span> and set up their profile first.
+              </p>
             </div>
           )}
 

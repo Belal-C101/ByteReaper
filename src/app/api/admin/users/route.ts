@@ -1,23 +1,42 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyFirebaseIdToken, adminAuth, adminDb } from "@/lib/firebase/admin";
+import { verifyFirebaseIdTokenDetailed, adminAuth, adminDb } from "@/lib/firebase/admin";
 import { isAdminEmail } from "@/lib/admin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-async function requireAdmin(req: NextRequest) {
+async function requireAdmin(req: NextRequest): Promise<
+  | { ok: true; token: NonNullable<Awaited<ReturnType<typeof verifyFirebaseIdTokenDetailed>>["decoded"]> }
+  | { ok: false; status: number; error: string }
+> {
   const authHeader = req.headers.get("authorization") || "";
-  const token = await verifyFirebaseIdToken(authHeader.replace(/^Bearer\s+/i, ""));
-  if (!token || !isAdminEmail(token.email || "")) {
-    return null;
+  const token = authHeader.replace(/^Bearer\s+/i, "");
+  const verifyResult = await verifyFirebaseIdTokenDetailed(token);
+
+  if (!verifyResult.ok || !verifyResult.decoded) {
+    return {
+      ok: false,
+      status: 401,
+      error: `Token verification failed: ${verifyResult.error || "unknown"}`,
+    };
   }
-  return token;
+
+  if (!isAdminEmail(verifyResult.decoded.email || "")) {
+    return {
+      ok: false,
+      status: 403,
+      error: `User ${verifyResult.decoded.email || verifyResult.decoded.uid} is not an admin`,
+    };
+  }
+
+  return { ok: true, token: verifyResult.decoded };
 }
 
 // GET — list all users from Firebase Auth
 export async function GET(req: NextRequest) {
-  const admin = await requireAdmin(req);
-  if (!admin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const auth = await requireAdmin(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  const admin = auth.token;
 
   const pageToken = req.nextUrl.searchParams.get("pageToken") || undefined;
 
@@ -50,8 +69,9 @@ export async function GET(req: NextRequest) {
 
 // PATCH — update user properties
 export async function PATCH(req: NextRequest) {
-  const admin = await requireAdmin(req);
-  if (!admin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const auth = await requireAdmin(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  const admin = auth.token;
 
   const body = await req.json().catch(() => null);
   if (!body?.uid) {
@@ -128,8 +148,9 @@ export async function PATCH(req: NextRequest) {
 
 // DELETE — delete a user account
 export async function DELETE(req: NextRequest) {
-  const admin = await requireAdmin(req);
-  if (!admin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const auth = await requireAdmin(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  const admin = auth.token;
 
   const body = await req.json().catch(() => null);
   if (!body?.uid) {

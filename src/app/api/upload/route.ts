@@ -5,7 +5,7 @@ import {
   type CloudinaryResourceType,
 } from "@/lib/cloudinary/server";
 import { uploadBufferToTmpfiles } from "@/lib/uploads/tmpfiles";
-import { verifyFirebaseIdToken } from "@/lib/firebase/admin";
+import { verifyFirebaseIdTokenDetailed } from "@/lib/firebase/admin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -135,9 +135,14 @@ export async function POST(req: NextRequest) {
   try {
     // Auth
     const authHeader = req.headers.get("authorization") || "";
-    const token = authHeader.replace(/^Bearer\s+/i, "");
-    const user = await verifyFirebaseIdToken(token);
-    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const verifyResult = await verifyFirebaseIdTokenDetailed(authHeader.replace(/^Bearer\s+/i, ""));
+    if (!verifyResult.ok || !verifyResult.decoded) {
+      return NextResponse.json(
+        { error: `Token verification failed: ${verifyResult.error || "unknown"}` },
+        { status: 401 }
+      );
+    }
+    const user = verifyResult.decoded;
 
     // Parse multipart
     const formData = await req.formData();

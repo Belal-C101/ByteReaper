@@ -9,16 +9,25 @@ function ensureInitialized() {
   const privateKey = process.env.FIREBASE_PRIVATE_KEY;
 
   if (!getApps().length) {
-    if (!projectId || !clientEmail || !privateKey) {
-      throw new Error("Firebase Admin environment variables are not configured");
+    const missing: string[] = [];
+    if (!projectId) missing.push("FIREBASE_PROJECT_ID");
+    if (!clientEmail) missing.push("FIREBASE_CLIENT_EMAIL");
+    if (!privateKey) missing.push("FIREBASE_PRIVATE_KEY");
+    if (missing.length > 0) {
+      throw new Error(`Firebase Admin missing env vars: ${missing.join(", ")}`);
     }
-    initializeApp({
-      credential: cert({
-        projectId,
-        clientEmail,
-        privateKey: privateKey.replace(/\\n/g, "\n"),
-      }),
-    });
+    try {
+      initializeApp({
+        credential: cert({
+          projectId,
+          clientEmail,
+          privateKey: (privateKey as string).replace(/\\n/g, "\n"),
+        }),
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`Firebase Admin init failed: ${msg}`);
+    }
   }
 }
 
@@ -58,11 +67,31 @@ export const adminDb = new Proxy({} as Firestore, {
   },
 });
 
-export async function verifyFirebaseIdToken(idToken: string) {
-  if (!idToken) return null;
-  try {
-    return await getAdminAuth().verifyIdToken(idToken);
-  } catch {
-    return null;
+export interface VerifyTokenResult {
+  ok: boolean;
+  decoded: Awaited<ReturnType<Auth["verifyIdToken"]>> | null;
+  error?: string;
+  errorCode?: string;
+}
+
+export async function verifyFirebaseIdTokenDetailed(idToken: string): Promise<VerifyTokenResult> {
+  if (!idToken) {
+    return { ok: false, decoded: null, error: "No ID token provided", errorCode: "no-token" };
   }
+  try {
+    const decoded = await getAdminAuth().verifyIdToken(idToken);
+    return { ok: true, decoded };
+  } catch (err) {
+    const e = err as { code?: string; message?: string; errorInfo?: { code?: string; message?: string } };
+    const errorCode = e.errorInfo?.code || e.code || "unknown";
+    const error = e.errorInfo?.message || e.message || "Token verification failed";
+    console.error("[firebase-admin] verifyIdToken FAILED:", errorCode, "-", error);
+    return { ok: false, decoded: null, error, errorCode };
+  }
+}
+
+// Back-compat wrapper — keeps existing call sites working
+export async function verifyFirebaseIdToken(idToken: string) {
+  const r = await verifyFirebaseIdTokenDetailed(idToken);
+  return r.decoded;
 }

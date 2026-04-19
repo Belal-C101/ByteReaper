@@ -39,7 +39,7 @@ interface AuthUser {
   providerData: Array<{ providerId: string; email?: string }>;
 }
 
-async function adminFetch(path: string, options?: RequestInit) {
+async function adminFetch<T = any>(path: string, options?: RequestInit): Promise<T> {
   const token = await auth.currentUser?.getIdToken();
   const res = await fetch(path, {
     ...options,
@@ -49,11 +49,17 @@ async function adminFetch(path: string, options?: RequestInit) {
       "Content-Type": "application/json",
     },
   });
-  return res.json();
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = data?.error || data?.message || `HTTP ${res.status}`;
+    throw new Error(msg);
+  }
+  return data as T;
 }
 
 export function UsersPanel() {
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [users, setUsers] = useState<AuthUser[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedUid, setSelectedUid] = useState<string | null>(null);
@@ -71,11 +77,13 @@ export function UsersPanel() {
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
-      const data = await adminFetch("/api/admin/users");
+      const data = await adminFetch<{ users: AuthUser[] }>("/api/admin/users");
       setUsers(data.users || []);
-    } catch {
+    } catch (err) {
       setUsers([]);
+      setLoadError(err instanceof Error ? err.message : "Failed to load users");
     } finally {
       setLoading(false);
     }
@@ -353,7 +361,31 @@ export function UsersPanel() {
               ))}
             </AnimatePresence>
 
-            {filteredUsers.length === 0 && (
+            {loadError && (
+              <div className="mx-1.5 my-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-600 dark:text-red-400">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <p className="font-medium mb-1">Failed to load users</p>
+                    <p className="opacity-90 break-words">{loadError}</p>
+                    <p className="mt-2 opacity-75">
+                      Visit{" "}
+                      <a
+                        href="/api/admin/diagnostics"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline"
+                      >
+                        /api/admin/diagnostics
+                      </a>{" "}
+                      to see server-side auth status.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {filteredUsers.length === 0 && !loadError && (
               <div className="text-center py-10 text-sm text-muted-foreground">
                 No users found
               </div>

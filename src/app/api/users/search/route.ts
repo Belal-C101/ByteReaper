@@ -1,13 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyFirebaseIdToken, adminDb } from "@/lib/firebase/admin";
+import { verifyFirebaseIdTokenDetailed, adminDb } from "@/lib/firebase/admin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get("authorization") || "";
-  const user = await verifyFirebaseIdToken(authHeader.replace(/^Bearer\s+/i, ""));
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const verifyResult = await verifyFirebaseIdTokenDetailed(authHeader.replace(/^Bearer\s+/i, ""));
+  if (!verifyResult.ok || !verifyResult.decoded) {
+    return NextResponse.json(
+      { error: `Token verification failed: ${verifyResult.error || "unknown"}` },
+      { status: 401 }
+    );
+  }
+  const user = verifyResult.decoded;
 
   const q = req.nextUrl.searchParams.get("q")?.trim().toLowerCase();
   if (!q || q.length < 2) {

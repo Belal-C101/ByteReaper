@@ -41,16 +41,20 @@ export function getAdminDb(): Firestore {
   return _adminDb;
 }
 
-// Keep backward-compatible named exports as getters
+// Keep backward-compatible named exports as getters (bind methods so `this` is correct)
 export const adminAuth = new Proxy({} as Auth, {
   get(_, prop) {
-    return (getAdminAuth() as unknown as Record<string, unknown>)[prop as string];
+    const target = getAdminAuth();
+    const value = (target as unknown as Record<string, unknown>)[prop as string];
+    return typeof value === "function" ? (value as Function).bind(target) : value;
   },
 });
 
 export const adminDb = new Proxy({} as Firestore, {
   get(_, prop) {
-    return (getAdminDb() as unknown as Record<string, unknown>)[prop as string];
+    const target = getAdminDb();
+    const value = (target as unknown as Record<string, unknown>)[prop as string];
+    return typeof value === "function" ? (value as Function).bind(target) : value;
   },
 });
 

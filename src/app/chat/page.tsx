@@ -15,7 +15,9 @@ import {
   serverTimestamp,
   Timestamp,
   getDoc,
+  getDocs,
   setDoc,
+  limit,
 } from "firebase/firestore";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -106,8 +108,8 @@ function UsernameSetupModal({
       const identity = await generateIdentity();
       const { encryptedKey, salt } = await encryptPrivateKey(identity.privateKey, password);
 
-      // Save profile
-      await setDoc(doc(db, "user_profiles", user.uid), {
+      // Save profile (keyed by email)
+      await setDoc(doc(db, "user_profiles", (user.email || "").toLowerCase()), {
         uid: user.uid,
         username: trimmed,
         usernameLower: trimmed.toLowerCase(),
@@ -562,7 +564,7 @@ export default function PrivateChatPage() {
 
   useEffect(() => {
     if (!user) return;
-    const unsub = onSnapshot(doc(db, "user_profiles", user.uid), (snap) => {
+    const unsub = onSnapshot(doc(db, "user_profiles", (user.email || "").toLowerCase()), (snap) => {
       if (snap.exists()) {
         setProfile(snap.data() as UserProfile);
         setNeedsSetup(false);
@@ -579,7 +581,7 @@ export default function PrivateChatPage() {
   useEffect(() => {
     if (!user || !profile) return;
     const interval = setInterval(() => {
-      updateDoc(doc(db, "user_profiles", user.uid), {
+      updateDoc(doc(db, "user_profiles", (user.email || "").toLowerCase()), {
         lastSeen: serverTimestamp(),
       }).catch(() => {});
     }, 60_000);
@@ -609,9 +611,9 @@ export default function PrivateChatPage() {
       peerUids.forEach((uid) => {
         setPeerProfiles((prev) => {
           if (prev[uid]) return prev;
-          getDoc(doc(db, "user_profiles", uid)).then((d) => {
-            if (d.exists()) {
-              setPeerProfiles((p) => ({ ...p, [uid]: d.data() as UserProfile }));
+          getDocs(query(collection(db, "user_profiles"), where("uid", "==", uid), limit(1))).then((snap) => {
+            if (!snap.empty) {
+              setPeerProfiles((p) => ({ ...p, [uid]: snap.docs[0].data() as UserProfile }));
             }
           });
           return prev;

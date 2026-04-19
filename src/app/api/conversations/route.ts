@@ -39,18 +39,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ id: doc.id, ...doc.data() });
     }
 
-    // Get both users' public keys for key wrapping
-    const [myProfile, peerProfile] = await Promise.all([
-      adminDb.collection("user_profiles").doc(user.uid).get(),
-      adminDb.collection("user_profiles").doc(peerUid).get(),
+    // Get both users' public keys for key wrapping (query by uid since docs are keyed by email)
+    const [mySnap, peerSnap] = await Promise.all([
+      adminDb.collection("user_profiles").where("uid", "==", user.uid).limit(1).get(),
+      adminDb.collection("user_profiles").where("uid", "==", peerUid).limit(1).get(),
     ]);
 
-    if (!peerProfile.exists) {
+    const myProfile = mySnap.empty ? null : mySnap.docs[0];
+    const peerProfile = peerSnap.empty ? null : peerSnap.docs[0];
+
+    if (!peerProfile) {
       return NextResponse.json({ error: "Peer user not found" }, { status: 404 });
     }
 
-    const myPubKey = myProfile.data()?.publicKey;
-    const peerPubKey = peerProfile.data()?.publicKey;
+    const myPubKey = myProfile?.data()?.publicKey;
+    const peerPubKey = peerProfile?.data()?.publicKey;
 
     if (!myPubKey || !peerPubKey) {
       return NextResponse.json(

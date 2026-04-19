@@ -132,20 +132,20 @@ service cloud.firestore {
 
     // ─── Private Chat: User Profiles ──────────────────────
 
-    match /user_profiles/{uid} {
+    match /user_profiles/{emailId} {
       // Anyone authenticated can read profiles (for search / peer info)
       allow read: if isAuthenticated() || isAdmin();
 
-      // Only the owner can create/update their own profile
-      allow create: if isOwner(uid) &&
+      // Only the owner can create/update their own profile (doc keyed by email)
+      allow create: if isEmailOwner(emailId) &&
                        request.resource.data.uid == request.auth.uid &&
                        request.resource.data.username is string &&
                        request.resource.data.publicKey is string;
 
-      allow update: if isOwner(uid) &&
+      allow update: if (isEmailOwner(emailId) || isAdmin()) &&
                        request.resource.data.uid == resource.data.uid;
 
-      allow delete: if isOwner(uid);
+      allow delete: if isEmailOwner(emailId) || isAdmin();
     }
 
     // ─── Private Chat: Username Reservations ──────────────

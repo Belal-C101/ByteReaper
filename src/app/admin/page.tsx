@@ -3,9 +3,10 @@
 import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Shield, MessageSquare, MessageCircle } from "lucide-react";
+import { Shield, MessageSquare, MessageCircle, Users } from "lucide-react";
 import { AIChatsPanel } from "@/components/admin/AIChatsPanel";
 import { MessengerPanel } from "@/components/admin/MessengerPanel";
+import { UsersPanel } from "@/components/admin/UsersPanel";
 
 export default function AdminPage() {
   const [activeTab, setActiveTab] = useState("ai-chats");
@@ -42,7 +43,7 @@ export default function AdminPage() {
       {/* Tabs */}
       <div className="px-4 sm:px-6 lg:px-10 pt-4">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full max-w-md grid-cols-2">
+          <TabsList className="grid w-full max-w-md grid-cols-3">
             <TabsTrigger value="ai-chats" className="gap-2">
               <MessageSquare className="h-4 w-4" />
               AI Chats
@@ -50,6 +51,10 @@ export default function AdminPage() {
             <TabsTrigger value="messenger" className="gap-2">
               <MessageCircle className="h-4 w-4" />
               Messenger
+            </TabsTrigger>
+            <TabsTrigger value="users" className="gap-2">
+              <Users className="h-4 w-4" />
+              Users
             </TabsTrigger>
           </TabsList>
 
@@ -59,6 +64,10 @@ export default function AdminPage() {
 
           <TabsContent value="messenger" className="mt-4">
             <MessengerPanel />
+          </TabsContent>
+
+          <TabsContent value="users" className="mt-4">
+            <UsersPanel />
           </TabsContent>
         </Tabs>
       </div>

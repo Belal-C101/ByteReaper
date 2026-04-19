@@ -7,6 +7,7 @@ import {
   query,
   orderBy,
   limit,
+  where,
   doc,
   getDoc,
 } from "firebase/firestore";
@@ -122,11 +123,13 @@ export function MessengerPanel() {
             if (profilesCache.has(uid)) {
               profiles.set(uid, profilesCache.get(uid)!);
             } else {
-              // Try loading from user_profiles
+              // Try loading from user_profiles by uid query
               try {
-                const profileDoc = await getDoc(doc(db, "user_profiles", uid));
-                if (profileDoc.exists()) {
-                  const profile = profileDoc.data() as UserProfileInfo;
+                const profileSnap = await getDocs(
+                  query(collection(db, "user_profiles"), where("uid", "==", uid), limit(1))
+                );
+                if (!profileSnap.empty) {
+                  const profile = profileSnap.docs[0].data() as UserProfileInfo;
                   profiles.set(uid, profile);
                 }
               } catch {

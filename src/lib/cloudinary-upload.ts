@@ -12,14 +12,36 @@ export interface UploadResult {
   originalFilename: string;
 }
 
+const DEBUG_CLOUDINARY_UPLOAD =
+  process.env.NEXT_PUBLIC_BYTEREAPER_DEBUG === "1" || process.env.NODE_ENV !== "production";
+
+function cloudinaryUploadDebugLog(message: string, payload?: unknown) {
+  if (!DEBUG_CLOUDINARY_UPLOAD) return;
+  if (typeof payload === "undefined") {
+    console.log("[ByteReaper]", message);
+    return;
+  }
+  console.log("[ByteReaper]", message, payload);
+}
+
 export async function uploadToCloudinary(
   file: File,
   onProgress?: (pct: number) => void
 ): Promise<UploadResult> {
+  cloudinaryUploadDebugLog("uploadToCloudinary:start", {
+    name: file.name,
+    size: file.size,
+    type: file.type,
+  });
+
   const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
   const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
 
   if (!cloudName || !uploadPreset) {
+    cloudinaryUploadDebugLog("uploadToCloudinary:missing-env", {
+      hasCloudName: Boolean(cloudName),
+      hasUploadPreset: Boolean(uploadPreset),
+    });
     throw new Error(
       "Cloudinary env vars missing (NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME / NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET)."
     );
@@ -41,11 +63,14 @@ export async function uploadToCloudinary(
 
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable && onProgress) {
-        onProgress(Math.round((e.loaded / e.total) * 100));
+        const pct = Math.round((e.loaded / e.total) * 100);
+        onProgress(pct);
+        cloudinaryUploadDebugLog("uploadToCloudinary:progress", { pct });
       }
     };
 
     xhr.onload = () => {
+      cloudinaryUploadDebugLog("uploadToCloudinary:xhr-onload", { status: xhr.status });
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
           const r = JSON.parse(xhr.responseText) as {
@@ -67,16 +92,31 @@ export async function uploadToCloudinary(
             bytes: r.bytes,
             originalFilename: r.original_filename,
           });
+          cloudinaryUploadDebugLog("uploadToCloudinary:end", {
+            publicId: r.public_id,
+            resourceType: r.resource_type,
+          });
         } catch {
+          cloudinaryUploadDebugLog("uploadToCloudinary:invalid-response");
           reject(new Error("Invalid Cloudinary response."));
         }
       } else {
+        cloudinaryUploadDebugLog("uploadToCloudinary:failed", {
+          status: xhr.status,
+          responseText: xhr.responseText,
+        });
         reject(new Error(`Cloudinary upload failed (${xhr.status}): ${xhr.responseText}`));
       }
     };
 
-    xhr.onerror = () => reject(new Error("Network error uploading to Cloudinary."));
-    xhr.ontimeout = () => reject(new Error("Upload timed out."));
+    xhr.onerror = () => {
+      cloudinaryUploadDebugLog("uploadToCloudinary:network-error");
+      reject(new Error("Network error uploading to Cloudinary."));
+    };
+    xhr.ontimeout = () => {
+      cloudinaryUploadDebugLog("uploadToCloudinary:timeout");
+      reject(new Error("Upload timed out."));
+    };
     xhr.timeout = 120000; // 2 minutes, direct to Cloudinary
 
     xhr.send(formData);

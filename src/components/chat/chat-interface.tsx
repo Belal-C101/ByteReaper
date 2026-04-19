@@ -82,6 +82,18 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { uploadToCloudinary } from "@/lib/cloudinary-upload";
 
+const DEBUG_MAIN_CHAT =
+  process.env.NEXT_PUBLIC_BYTEREAPER_DEBUG === "1" || process.env.NODE_ENV !== "production";
+
+function mainChatDebugLog(message: string, payload?: unknown) {
+  if (!DEBUG_MAIN_CHAT) return;
+  if (typeof payload === "undefined") {
+    console.log("[ByteReaper]", message);
+    return;
+  }
+  console.log("[ByteReaper]", message, payload);
+}
+
 const MAX_ATTACHMENT_SIZE_BYTES = 20 * 1024 * 1024;
 const MAX_ATTACHMENTS_PER_MESSAGE = 1;
 const DRAFT_CHAT_ID_PREFIX = "draft-chat-";
@@ -1235,6 +1247,10 @@ export function ChatInterface() {
   }, [user, sessionId, draftSession, sessions, archivedSessions, deleteDialogSession]);
 
   const handleFileUpload = useCallback(async (files: FileList) => {
+    mainChatDebugLog("chatInterface:handleFileUpload:start", {
+      selectedCount: files.length,
+      existingAttachments: attachments.length,
+    });
     setChatError(null);
     const availableSlots = Math.max(MAX_ATTACHMENTS_PER_MESSAGE - attachments.length, 0);
 
@@ -1278,11 +1294,14 @@ export function ChatInterface() {
           size: file.size, content, preview,
         });
       } catch (fileError) {
-        console.error(`Failed to process attachment ${file.name}:`, fileError);
+        console.error("[ByteReaper] chatInterface:handleFileUpload:error", fileError);
         setChatError(`Could not attach "${file.name}". Try a different file.`);
       }
     }
     if (newAttachments.length > 0) setAttachments((prev) => [...prev, ...newAttachments]);
+    mainChatDebugLog("chatInterface:handleFileUpload:end", {
+      attachedCount: newAttachments.length,
+    });
   }, [attachments.length]);
 
   const removeAttachment = (id: string) => setAttachments((prev) => prev.filter((a) => a.id !== id));
@@ -1629,6 +1648,11 @@ export function ChatInterface() {
   }, []);
 
   const sendMessage = async () => {
+    mainChatDebugLog("chatInterface:sendMessage:start", {
+      hasInput: Boolean(input.trim()),
+      attachmentCount: attachments.length,
+      isLoading,
+    });
     if ((!input.trim() && attachments.length === 0) || isLoading || !user) return;
     if (sessionId && archivedSessions.some((s) => s.id === sessionId)) {
       setChatError("This chat is archived. Restore it before sending new messages.");
@@ -1660,6 +1684,8 @@ export function ChatInterface() {
     let uploadedFileLinks: UploadedMediaLink[] = [];
 
     if (attachments.length > 0) {
+      mainChatDebugLog("chatInterface:sendMessage:upload:start", { attachmentCount: attachments.length });
+      mainChatDebugLog("chatInterface:setIsUploading", { next: true, reason: "attachment-upload-start" });
       setIsUploading(true);
       setUploadProgressPct(0);
       try {
@@ -1709,15 +1735,19 @@ export function ChatInterface() {
           }
         }
       } catch (uploadErr) {
-        console.error('[Upload] FAILED:', uploadErr);
+        console.error("[ByteReaper] chatInterface:sendMessage:upload:error", uploadErr);
         setChatError(`File upload failed: ${uploadErr instanceof Error ? uploadErr.message : 'unknown error'}`);
+        mainChatDebugLog("chatInterface:setIsUploading", { next: false, reason: "attachment-upload-error" });
         setIsUploading(false);
         setUploadProgressPct(0);
+        mainChatDebugLog("chatInterface:setIsLoading", { next: false, reason: "attachment-upload-error" });
         setIsLoading(false);
         return; // ABORT — do not send message with no links
       } finally {
+        mainChatDebugLog("chatInterface:setIsUploading", { next: false, reason: "attachment-upload-finally" });
         setIsUploading(false);
         setUploadProgressPct(0);
+        mainChatDebugLog("chatInterface:sendMessage:upload:end");
       }
     }
 
@@ -1741,7 +1771,9 @@ export function ChatInterface() {
       userMessage,
       { id: assistantId, role: "assistant", content: "", timestamp: new Date(), isStreaming: true },
     ]);
-    setInput(""); setAttachments([]); setIsLoading(true);
+    setInput(""); setAttachments([]);
+    mainChatDebugLog("chatInterface:setIsLoading", { next: true, reason: "stream-request-start" });
+    setIsLoading(true);
 
     try {
       // Fire the API call INSTANTLY
@@ -1809,7 +1841,7 @@ export function ChatInterface() {
       // NOW persist to Firestore in the background (after AI responded)
       persistExchange(user, needsNewSession, normalizedPrompt, userMessage, assistantMessage, modelUsedForExchange);
     } catch (error) {
-      console.error("Chat error:", error);
+      console.error("[ByteReaper] chatInterface:sendMessage:error", error);
       const fallbackText = error instanceof Error
         ? `Sorry, I encountered an error: ${error.message}`
         : "Sorry, I encountered an error. Please try again.";
@@ -1827,7 +1859,9 @@ export function ChatInterface() {
       // Persist error exchange in background
       persistExchange(user, needsNewSession, normalizedPrompt, userMessage, errorAssistantMessage, modelUsedForExchange);
     } finally {
+      mainChatDebugLog("chatInterface:setIsLoading", { next: false, reason: "sendMessage-finally" });
       setIsLoading(false);
+      mainChatDebugLog("chatInterface:sendMessage:end");
     }
   };
 

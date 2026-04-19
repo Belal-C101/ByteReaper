@@ -40,6 +40,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
+import type { IAgoraRTCClient, IMicrophoneAudioTrack, IRemoteAudioTrack } from "agora-rtc-sdk-ng";
 import {
   encryptMessage,
   decryptMessage,
@@ -54,6 +55,18 @@ import {
 } from "@/lib/crypto/e2e";
 import { uploadFile } from "@/lib/uploads/client";
 import type { Conversation, ChatMessage, UserProfile } from "@/types/private-chat";
+
+const DEBUG_PRIVATE_CHAT =
+  process.env.NEXT_PUBLIC_BYTEREAPER_DEBUG === "1" || process.env.NODE_ENV !== "production";
+
+function privateDebugLog(message: string, payload?: unknown) {
+  if (!DEBUG_PRIVATE_CHAT) return;
+  if (typeof payload === "undefined") {
+    console.log("[ByteReaper]", message);
+    return;
+  }
+  console.log("[ByteReaper]", message, payload);
+}
 
 // ─── Username setup modal ──────────────────────────────────
 
@@ -236,7 +249,8 @@ function UnlockModal({
         password
       );
       onUnlock(pk);
-    } catch {
+    } catch (err) {
+      console.error("[ByteReaper] handleUnlock:error", err);
       setError("Wrong password");
     } finally {
       setLoading(false);
@@ -588,13 +602,29 @@ export default function PrivateChatPage() {
   const [callStatus, setCallStatus] = useState<{ peerName: string; status: "ringing" | "connected" } | null>(null);
   const [startChatError, setStartChatError] = useState<string | null>(null);
   const [creatingChat, setCreatingChat] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [uploadProgressPct, setUploadProgressPct] = useState(0);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement>(null);
+  const callClientRef = useRef<IAgoraRTCClient | null>(null);
+  const localAudioTrackRef = useRef<IMicrophoneAudioTrack | null>(null);
+  const remoteAudioTrackRef = useRef<IRemoteAudioTrack | null>(null);
+  const activeCallChannelRef = useRef<string | null>(null);
+  const acceptedIncomingCallIdRef = useRef<string | null>(null);
 
   const activeConversation = useMemo(
     () => conversations.find((c) => c.id === activeConvId) ?? null,
     [conversations, activeConvId]
   );
+
+  useEffect(() => {
+    privateDebugLog("state:sending", { sending });
+  }, [sending]);
+
+  useEffect(() => {
+    privateDebugLog("state:callStatus", { callStatus });
+  }, [callStatus]);
 
   // ── Auth guard ───────────────────────────────────────────
 
@@ -627,7 +657,9 @@ export default function PrivateChatPage() {
     const interval = setInterval(() => {
       updateDoc(doc(db, "user_profiles", (user.email || "").toLowerCase()), {
         lastSeen: serverTimestamp(),
-      }).catch(() => {});
+      }).catch((err) => {
+        console.error("[ByteReaper] updateLastSeen:error", err);
+      });
     }, 60_000);
     return () => clearInterval(interval);
   }, [user, profile]);
@@ -704,7 +736,9 @@ export default function PrivateChatPage() {
     // Reset unread
     updateDoc(doc(db, "conversations", activeConvId), {
       [`unread.${user.uid}`]: 0,
-    }).catch(() => {});
+    }).catch((err) => {
+      console.error("[ByteReaper] resetUnread:error", err);
+    });
 
     return unsub;
   }, [activeConvId, user]);
@@ -738,7 +772,11 @@ export default function PrivateChatPage() {
         try {
           const text = await decryptMessage(msg.ciphertext, msg.iv, convKey);
           newDecrypted[msg.id] = text;
-        } catch {
+        } catch (err) {
+          console.error("[ByteReaper] decryptMessage:error", {
+            messageId: msg.id,
+            err,
+          });
           newDecrypted[msg.id] = "[decryption failed]";
         }
       }
@@ -750,6 +788,154 @@ export default function PrivateChatPage() {
 
     decryptAll();
   }, [messages, privateKey, profile, activeConvId, conversations, convKeyCache, decryptedCache]);
+
+  const resolveConversationKey = useCallback(async (conversationId: string) => {
+    privateDebugLog("resolveConversationKey:start", { conversationId });
+
+    const cached = convKeyCache[conversationId];
+    if (cached) {
+      privateDebugLog("resolveConversationKey:cache-hit", { conversationId });
+      return cached;
+    }
+
+    if (!privateKey || !profile) {
+      throw new Error("Encryption identity is not unlocked.");
+    }
+
+    const conversation = conversations.find((conv) => conv.id === conversationId);
+    if (!conversation) {
+      throw new Error("Conversation not found.");
+    }
+
+    const wrappedKey = conversation.wrappedKeys?.[profile.uid];
+    if (!wrappedKey) {
+      throw new Error("Conversation key not available for current user.");
+    }
+
+    const unwrapped = await unwrapKey(wrappedKey, fromBase64(profile.publicKey), privateKey);
+    setConvKeyCache((prev) => ({ ...prev, [conversationId]: unwrapped }));
+    privateDebugLog("resolveConversationKey:unwrapped", { conversationId });
+    return unwrapped;
+  }, [convKeyCache, conversations, privateKey, profile]);
+
+  const cleanupActiveCall = useCallback(async (reason: string, markEnded = false) => {
+    privateDebugLog("call:cleanup:start", {
+      reason,
+      markEnded,
+      channelName: activeCallChannelRef.current,
+    });
+
+    const localTrack = localAudioTrackRef.current;
+    if (localTrack) {
+      localTrack.stop();
+      localTrack.close();
+      localAudioTrackRef.current = null;
+    }
+
+    const remoteTrack = remoteAudioTrackRef.current;
+    if (remoteTrack) {
+      remoteTrack.stop();
+      remoteAudioTrackRef.current = null;
+    }
+
+    const client = callClientRef.current;
+    if (client) {
+      try {
+        await client.leave();
+      } catch (leaveErr) {
+        console.error("[ByteReaper] call:cleanup:leave-error", leaveErr);
+      }
+      callClientRef.current = null;
+    }
+
+    if (markEnded && activeCallChannelRef.current) {
+      const channelName = activeCallChannelRef.current;
+      await updateDoc(doc(db, "calls", channelName), {
+        status: "ended",
+        endedAt: serverTimestamp(),
+      }).catch((updateErr) => {
+        console.error("[ByteReaper] call:cleanup:update-ended-error", updateErr);
+      });
+    }
+
+    activeCallChannelRef.current = null;
+    acceptedIncomingCallIdRef.current = null;
+    setCallStatus(null);
+    privateDebugLog("call:cleanup:end", { reason });
+  }, []);
+
+  const joinVoiceChannel = useCallback(async (
+    channelName: string,
+    conversationId: string,
+    peerName: string
+  ) => {
+    privateDebugLog("call:join:start", { channelName, conversationId, peerName });
+
+    if (!user) {
+      throw new Error("User is not authenticated.");
+    }
+
+    await cleanupActiveCall("join-new-channel", false);
+
+    const token = await auth.currentUser?.getIdToken();
+    const res = await fetch("/api/agora/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        channelName,
+        conversationId,
+      }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data?.error || `Agora token failed (HTTP ${res.status})`);
+    }
+
+    const AgoraRTC = (await import("agora-rtc-sdk-ng")).default;
+    const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
+
+    client.on("user-published", async (remoteUser, mediaType) => {
+      privateDebugLog("call:user-published", {
+        uid: remoteUser.uid,
+        mediaType,
+      });
+
+      await client.subscribe(remoteUser, mediaType);
+      if (mediaType === "audio" && remoteUser.audioTrack) {
+        remoteAudioTrackRef.current = remoteUser.audioTrack;
+        if (remoteAudioRef.current) {
+          remoteUser.audioTrack.play(remoteAudioRef.current);
+        } else {
+          remoteUser.audioTrack.play();
+        }
+      }
+    });
+
+    client.on("user-unpublished", (remoteUser, mediaType) => {
+      privateDebugLog("call:user-unpublished", {
+        uid: remoteUser.uid,
+        mediaType,
+      });
+    });
+
+    client.on("connection-state-change", (curState, prevState, reason) => {
+      privateDebugLog("call:connection-state", { curState, prevState, reason });
+    });
+
+    await client.join(data.appId, channelName, data.token, data.uid);
+    const localAudioTrack = await AgoraRTC.createMicrophoneAudioTrack();
+    await client.publish([localAudioTrack]);
+
+    callClientRef.current = client;
+    localAudioTrackRef.current = localAudioTrack;
+    activeCallChannelRef.current = channelName;
+    setCallStatus({ peerName, status: "connected" });
+    privateDebugLog("call:join:end", { channelName, peerName });
+  }, [cleanupActiveCall, user]);
 
   // ── Unlock handler ───────────────────────────────────────
 
@@ -811,14 +997,19 @@ export default function PrivateChatPage() {
   // ── Send message ─────────────────────────────────────────
 
   const handleSend = async () => {
+    privateDebugLog("handleSend:start", {
+      activeConvId,
+      inputLength: inputText.length,
+      sending,
+    });
     if (!inputText.trim() || !activeConvId || !user || sending) return;
     const text = inputText.trim();
+    setActionError(null);
     setInputText("");
     setSending(true);
 
     try {
-      const convKey = convKeyCache[activeConvId];
-      if (!convKey) throw new Error("No conversation key");
+      const convKey = await resolveConversationKey(activeConvId);
 
       // Check for @ByteReaper mention
       const hasMention = /@bytereaper/i.test(text);
@@ -882,26 +1073,38 @@ export default function PrivateChatPage() {
         }
       }
     } catch (err) {
-      console.error("Send error:", err);
+      console.error("[ByteReaper] handleSend:error", err);
+      setActionError(err instanceof Error ? err.message : "Failed to send message.");
       setInputText(text); // Restore text on failure
     } finally {
       setSending(false);
+      privateDebugLog("handleSend:end", { activeConvId });
     }
   };
 
   // ── Upload attachment ────────────────────────────────────
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    privateDebugLog("handleFileUpload:start", {
+      activeConvId,
+      sending,
+      files: e.target.files?.length ?? 0,
+    });
     const file = e.target.files?.[0];
     if (!file || !activeConvId || !user) return;
     e.target.value = "";
 
     try {
-      const convKey = convKeyCache[activeConvId];
-      if (!convKey) throw new Error("No conversation key");
+      setActionError(null);
+      setUploadProgressPct(0);
+
+      const convKey = await resolveConversationKey(activeConvId);
 
       setSending(true);
-      const uploaded = await uploadFile(file, "private-chat");
+      const uploaded = await uploadFile(file, "private-chat", (pct) => {
+        setUploadProgressPct(pct);
+        privateDebugLog("handleFileUpload:progress", { pct, file: file.name });
+      });
 
       const isImage = file.type.startsWith("image/");
       const { ciphertext, iv } = await encryptMessage(
@@ -910,7 +1113,7 @@ export default function PrivateChatPage() {
       );
 
       const token = await auth.currentUser?.getIdToken();
-      await fetch(`/api/conversations/${activeConvId}/messages`, {
+      const msgRes = await fetch(`/api/conversations/${activeConvId}/messages`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -930,16 +1133,24 @@ export default function PrivateChatPage() {
           },
         }),
       });
+      if (!msgRes.ok) {
+        const msgData = await msgRes.json().catch(() => ({} as { error?: string }));
+        throw new Error(msgData.error || `Attachment message failed (HTTP ${msgRes.status})`);
+      }
     } catch (err) {
-      console.error("Upload error:", err);
+      console.error("[ByteReaper] handleFileUpload:error", err);
+      setActionError(err instanceof Error ? err.message : "Upload failed.");
     } finally {
       setSending(false);
+      setUploadProgressPct(0);
+      privateDebugLog("handleFileUpload:end", { activeConvId });
     }
   };
 
   // ── Voice call ───────────────────────────────────────────
 
   const handleVoiceCall = async () => {
+    privateDebugLog("handleVoiceCall:start", { activeConvId, hasUser: Boolean(user) });
     if (!activeConvId || !user || !activeConversation) return;
     const peerUid = activeConversation.participants.find((p) => p !== user.uid);
     if (!peerUid) return;
@@ -948,22 +1159,8 @@ export default function PrivateChatPage() {
     const peerName = peerProfile?.displayName || peerProfile?.username || "User";
 
     try {
-      const channelName = `br_${activeConvId}_${Date.now()}`;
-      const token = await auth.currentUser?.getIdToken();
-      const res = await fetch("/api/agora/token", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          channelName,
-          conversationId: activeConvId,
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      setActionError(null);
+      const channelName = `br_${activeConvId}`;
 
       // Create call document in Firestore
       await setDoc(doc(db, "calls", channelName), {
@@ -977,37 +1174,20 @@ export default function PrivateChatPage() {
       });
 
       setCallStatus({ peerName, status: "ringing" });
-
-      // Dynamic import for Agora SDK (client-only)
-      const AgoraRTC = (await import("agora-rtc-sdk-ng")).default;
-      const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
-
-      await client.join(data.appId, channelName, data.token, data.uid);
-      const localAudioTrack = await AgoraRTC.createMicrophoneAudioTrack();
-      await client.publish([localAudioTrack]);
-
-      setCallStatus({ peerName, status: "connected" });
-
-      // Store cleanup references on window for end call button
-      (window as unknown as Record<string, unknown>).__agoraCleanup = async () => {
-        localAudioTrack.close();
-        await client.leave();
-        await updateDoc(doc(db, "calls", channelName), {
-          status: "ended",
-          endedAt: serverTimestamp(),
-        });
-        setCallStatus(null);
-      };
+      await joinVoiceChannel(channelName, activeConvId, peerName);
     } catch (err) {
-      console.error("Voice call error:", err);
+      console.error("[ByteReaper] handleVoiceCall:error", err);
+      setActionError(err instanceof Error ? err.message : "Voice call failed.");
       setCallStatus(null);
+    } finally {
+      privateDebugLog("handleVoiceCall:end", { activeConvId });
     }
   };
 
   const handleEndCall = async () => {
-    const cleanup = (window as unknown as Record<string, unknown>).__agoraCleanup as (() => Promise<void>) | undefined;
-    if (cleanup) await cleanup();
-    else setCallStatus(null);
+    privateDebugLog("handleEndCall:start", { channelName: activeCallChannelRef.current });
+    await cleanupActiveCall("manual-end-call", true);
+    privateDebugLog("handleEndCall:end");
   };
 
   // ── Typing indicator ────────────────────────────────────
@@ -1017,10 +1197,77 @@ export default function PrivateChatPage() {
     const timeout = setTimeout(() => {
       updateDoc(doc(db, "conversations", activeConvId), {
         [`typing.${user.uid}`]: Date.now(),
-      }).catch(() => {});
+      }).catch((err) => {
+        console.error("[ByteReaper] typingIndicator:error", err);
+      });
     }, 500);
     return () => clearTimeout(timeout);
   }, [inputText, activeConvId, user]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    privateDebugLog("incomingCallEffect:setup", { uid: user.uid });
+    const callsQuery = query(collection(db, "calls"), where("calleeId", "==", user.uid));
+    const unsubscribe = onSnapshot(
+      callsQuery,
+      async (snapshot) => {
+        privateDebugLog("incomingCallEffect:snapshot", { count: snapshot.docs.length });
+
+        for (const callDoc of snapshot.docs) {
+          const callData = callDoc.data() as {
+            channelName: string;
+            conversationId: string;
+            callerId: string;
+            status: "ringing" | "accepted" | "rejected" | "ended" | "missed";
+          };
+
+          if (
+            callData.status === "ringing" &&
+            acceptedIncomingCallIdRef.current !== callDoc.id &&
+            activeCallChannelRef.current !== callData.channelName
+          ) {
+            acceptedIncomingCallIdRef.current = callDoc.id;
+            const peerName =
+              peerProfiles[callData.callerId]?.displayName ||
+              peerProfiles[callData.callerId]?.username ||
+              "User";
+
+            setCallStatus({ peerName, status: "ringing" });
+            await updateDoc(doc(db, "calls", callDoc.id), {
+              status: "accepted",
+              acceptedAt: serverTimestamp(),
+            }).catch((updateErr) => {
+              console.error("[ByteReaper] incomingCallEffect:accept-error", updateErr);
+            });
+
+            try {
+              await joinVoiceChannel(callData.channelName, callData.conversationId, peerName);
+            } catch (joinErr) {
+              console.error("[ByteReaper] incomingCallEffect:join-error", joinErr);
+              setActionError(joinErr instanceof Error ? joinErr.message : "Failed to join incoming call.");
+            }
+          }
+
+          if (
+            callData.status === "ended" &&
+            activeCallChannelRef.current &&
+            activeCallChannelRef.current === callData.channelName
+          ) {
+            await cleanupActiveCall("remote-ended-call", false);
+          }
+        }
+      },
+      (err) => {
+        console.error("[ByteReaper] incomingCallEffect:error", err);
+      }
+    );
+
+    return () => {
+      privateDebugLog("incomingCallEffect:cleanup", { uid: user.uid });
+      unsubscribe();
+    };
+  }, [cleanupActiveCall, joinVoiceChannel, peerProfiles, user]);
 
   // ── Peer info helper ─────────────────────────────────────
 
@@ -1063,6 +1310,8 @@ export default function PrivateChatPage() {
 
   return (
     <div className="flex h-[calc(100vh-3.5rem)] overflow-hidden">
+      <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
+
       {/* Call overlay */}
       <AnimatePresence>
         {callStatus && (
@@ -1305,6 +1554,16 @@ export default function PrivateChatPage() {
                   )}
                 </Button>
               </div>
+              {uploadProgressPct > 0 && (
+                <p className="text-[10px] text-primary/70 mt-1 ml-11">
+                  Uploading... {uploadProgressPct}%
+                </p>
+              )}
+              {actionError && (
+                <p className="text-[10px] text-destructive mt-1 ml-11">
+                  {actionError}
+                </p>
+              )}
               <p className="text-[10px] text-muted-foreground mt-1 ml-11">
                 Type <span className="font-medium">@ByteReaper</span> to ask AI
               </p>

@@ -11,7 +11,7 @@ import {
   User,
   FileCode,
   Image as ImageIcon,
-  File,
+  File as FileGlyph,
   ChevronDown,
   Sparkles,
   Plus,
@@ -379,7 +379,7 @@ function FileIcon({ type }: { type: "code" | "image" | "text" | "other" }) {
   switch (type) {
     case "code": return <FileCode className="h-3.5 w-3.5" />;
     case "image": return <ImageIcon className="h-3.5 w-3.5" />;
-    default: return <File className="h-3.5 w-3.5" />;
+    default: return <FileGlyph className="h-3.5 w-3.5" />;
   }
 }
 

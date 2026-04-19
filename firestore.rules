@@ -123,5 +123,82 @@ service cloud.firestore {
                                request.resource.data.userId == request.auth.uid &&
                                request.resource.data.favorites is list;
     }
+
+    // ─── Private Chat: User Profiles ──────────────────────
+
+    match /user_profiles/{uid} {
+      // Anyone authenticated can read profiles (for search / peer info)
+      allow read: if isAuthenticated();
+
+      // Only the owner can create/update their own profile
+      allow create: if isOwner(uid) &&
+                       request.resource.data.uid == request.auth.uid &&
+                       request.resource.data.username is string &&
+                       request.resource.data.publicKey is string;
+
+      allow update: if isOwner(uid) &&
+                       request.resource.data.uid == resource.data.uid;
+
+      allow delete: if isOwner(uid);
+    }
+
+    // ─── Private Chat: Username Reservations ──────────────
+
+    match /usernames/{usernameLower} {
+      allow read: if isAuthenticated();
+
+      // Only the owner of the uid stored can create
+      allow create: if isAuthenticated() &&
+                       request.resource.data.uid == request.auth.uid;
+
+      // Only the owner can delete their own reservation
+      allow delete: if isAuthenticated() &&
+                       resource.data.uid == request.auth.uid;
+    }
+
+    // ─── Private Chat: Conversations ──────────────────────
+
+    match /conversations/{conversationId} {
+      // Only participants can read
+      allow read: if isAuthenticated() &&
+                     request.auth.uid in resource.data.participants;
+
+      // Creation handled by server API, but allow client-side updates for
+      // wrappedKeys, typing, and unread counters
+      allow update: if isAuthenticated() &&
+                       request.auth.uid in resource.data.participants;
+
+      // Messages subcollection
+      match /messages/{messageId} {
+        // Only conversation participants can read messages
+        allow read: if isAuthenticated() &&
+                       request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+
+        // Only conversation participants can write messages,
+        // and senderId must match the authenticated user
+        allow create: if isAuthenticated() &&
+                         request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants &&
+                         request.resource.data.senderId == request.auth.uid;
+
+        // Allow updating readBy array
+        allow update: if isAuthenticated() &&
+                         request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+      }
+    }
+
+    // ─── Private Chat: Voice Calls ────────────────────────
+
+    match /calls/{callId} {
+      allow read: if isAuthenticated() &&
+                     (resource.data.callerId == request.auth.uid ||
+                      resource.data.calleeId == request.auth.uid);
+
+      allow create: if isAuthenticated() &&
+                       request.resource.data.callerId == request.auth.uid;
+
+      allow update: if isAuthenticated() &&
+                       (resource.data.callerId == request.auth.uid ||
+                        resource.data.calleeId == request.auth.uid);
+    }
   }
 }

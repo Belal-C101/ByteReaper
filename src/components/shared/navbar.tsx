@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import {
   Github,
   MessageSquare,
+  MessageCircle,
   LogOut,
   User as UserIcon,
   ChevronDown,
@@ -97,6 +98,13 @@ export function Navbar() {
                   <Link href="/analyze">
                     <MessageSquare className="h-4 w-4" />
                     <span className="hidden sm:inline text-sm">Chat</span>
+                  </Link>
+                </Button>
+
+                <Button asChild variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-foreground transition-colors" title="Private Messages">
+                  <Link href="/chat">
+                    <MessageCircle className="h-4 w-4" />
+                    <span className="hidden sm:inline text-sm">Messages</span>
                   </Link>
                 </Button>
 
@@ -290,6 +298,14 @@ export function Navbar() {
                     >
                       <MessageSquare className="h-4 w-4" />
                       Chat
+                    </Link>
+                    <Link
+                      href="/chat"
+                      onClick={() => setMobileMenuOpen(false)}
+                      className="flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent"
+                    >
+                      <MessageCircle className="h-4 w-4" />
+                      Messages
                     </Link>
                     <button
                       onClick={() => {

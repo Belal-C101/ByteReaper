@@ -577,12 +577,15 @@ async function attachmentToBlobForDownload(attachment: FileAttachment): Promise<
   });
 }
 
-async function uploadBlobForHostedLink(blob: Blob, fileName: string): Promise<UploadedMediaLink | null> {
+async function uploadBlobForHostedLink(blob: Blob, fileName: string, token?: string): Promise<UploadedMediaLink | null> {
   try {
     const formData = new FormData();
     formData.append("files", blob, fileName || "attachment");
 
-    const uploadRes = await fetch("/api/upload", { method: "POST", body: formData });
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    const uploadRes = await fetch("/api/upload", { method: "POST", body: formData, headers });
     if (!uploadRes.ok) return null;
 
     const uploadData = await uploadRes.json();
@@ -642,10 +645,10 @@ async function promptForAttachmentFile(): Promise<File | null> {
   });
 }
 
-async function uploadLegacyDataUrlLink(dataUrl: string, fileName: string): Promise<UploadedMediaLink | null> {
+async function uploadLegacyDataUrlLink(dataUrl: string, fileName: string, token?: string): Promise<UploadedMediaLink | null> {
   try {
     const blob = await dataUrlToBlob(dataUrl);
-    return uploadBlobForHostedLink(blob, fileName || "attachment");
+    return uploadBlobForHostedLink(blob, fileName || "attachment", token);
   } catch (error) {
     console.error("Failed to migrate legacy data URL link:", error);
     return null;
@@ -931,7 +934,8 @@ export function ChatInterface() {
               nextFileLinks.push(link);
               continue;
             }
-            const migrated = await uploadLegacyDataUrlLink(link.url, link.name);
+            const token = await user.getIdToken();
+            const migrated = await uploadLegacyDataUrlLink(link.url, link.name, token);
             if (migrated) nextFileLinks.push(migrated);
           }
 
@@ -940,7 +944,8 @@ export function ChatInterface() {
               nextImageLinks.push(link);
               continue;
             }
-            const migrated = await uploadLegacyDataUrlLink(link.url, link.name);
+            const imgToken = await user.getIdToken();
+            const migrated = await uploadLegacyDataUrlLink(link.url, link.name, imgToken);
             if (migrated) nextImageLinks.push(migrated);
           }
 
@@ -1457,7 +1462,8 @@ export function ChatInterface() {
       return;
     }
 
-    const migrated = await uploadLegacyDataUrlLink(link.url, link.name);
+    const migrateToken = await user.getIdToken();
+    const migrated = await uploadLegacyDataUrlLink(link.url, link.name, migrateToken);
     if (!migrated) {
       openInlineDataFile(link.url, link.name);
       return;
@@ -1510,7 +1516,8 @@ export function ChatInterface() {
       triggerBlobDownloadOrOpen(blob, attachment.name);
 
       // Attempt to create a hosted link in the background for future access
-      const hostedLink = await uploadBlobForHostedLink(blob, attachment.name);
+      const dlToken = await user?.getIdToken();
+      const hostedLink = await uploadBlobForHostedLink(blob, attachment.name, dlToken);
 
       if (hostedLink) {
         const existingFileLinks = message.fileLinks || [];
@@ -1621,10 +1628,12 @@ export function ChatInterface() {
         const uploadController = new AbortController();
         const uploadTimeout = window.setTimeout(() => uploadController.abort(), 15000);
 
+        const uploadToken = user ? await user.getIdToken() : undefined;
         const uploadRes = await fetch('/api/upload', {
           method: 'POST',
           body: formData,
           signal: uploadController.signal,
+          headers: uploadToken ? { Authorization: `Bearer ${uploadToken}` } : {},
         }).finally(() => {
           window.clearTimeout(uploadTimeout);
         });

@@ -1,131 +1,99 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { uploadMultipleFiles, UploadResult } from '@/lib/cloudinary';
+import { NextRequest, NextResponse } from "next/server";
+import { uploadBufferToCloudinary } from "@/lib/cloudinary/server";
+import { verifyFirebaseIdToken } from "@/lib/firebase/admin";
 
-export const maxDuration = 30;
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-// Max 10MB per file
-const MAX_FILE_SIZE = 10 * 1024 * 1024;
+const MAX_SIZE = 25 * 1024 * 1024; // 25 MB
 
-const EXTENSION_MIME_MAP: Record<string, string> = {
-  md: 'text/markdown',
-  markdown: 'text/markdown',
-  txt: 'text/plain',
-  csv: 'text/csv',
-  xml: 'application/xml',
-  ini: 'text/plain',
-  log: 'text/plain',
-  json: 'application/json',
-  js: 'text/javascript',
-  jsx: 'text/javascript',
-  ts: 'text/typescript',
-  tsx: 'text/typescript',
-  py: 'text/x-python',
-  java: 'text/x-java-source',
-  c: 'text/x-c',
-  cpp: 'text/x-c++src',
-  h: 'text/x-c',
-  css: 'text/css',
-  html: 'text/html',
-  yml: 'application/x-yaml',
-  yaml: 'application/x-yaml',
-  sql: 'application/sql',
-  sh: 'application/x-sh',
-  bash: 'application/x-sh',
-  go: 'text/x-go',
-  rs: 'text/rust',
-  rb: 'text/x-ruby',
-  php: 'application/x-httpd-php',
-  pdf: 'application/pdf',
-  doc: 'application/msword',
-  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  xls: 'application/vnd.ms-excel',
-  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  ppt: 'application/vnd.ms-powerpoint',
-  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  zip: 'application/zip',
-  rar: 'application/vnd.rar',
-  '7z': 'application/x-7z-compressed',
-  tar: 'application/x-tar',
-  gz: 'application/gzip',
-  mp3: 'audio/mpeg',
-  wav: 'audio/wav',
-  ogg: 'audio/ogg',
-  mp4: 'video/mp4',
-  webm: 'video/webm',
-  mov: 'video/quicktime',
-  avi: 'video/x-msvideo',
-};
-
-function normalizeMimeType(file: File): string {
-  if (typeof file.type === 'string' && file.type.trim().length > 0) {
-    return file.type;
-  }
-
-  const ext = file.name.split('.').pop()?.toLowerCase() || '';
-  return EXTENSION_MIME_MAP[ext] || 'application/octet-stream';
-}
-
-export async function POST(request: NextRequest) {
+export async function POST(req: NextRequest) {
   try {
-    const formData = await request.formData();
-    const files = formData.getAll('files') as File[];
+    // 1. Auth
+    const authHeader = req.headers.get("authorization") || "";
+    const token = authHeader.replace(/^Bearer\s+/i, "");
+    const user = await verifyFirebaseIdToken(token);
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    if (!files || files.length === 0) {
-      return NextResponse.json({ error: 'No files provided' }, { status: 400 });
-    }
+    // 2. Parse multipart — supports both single "file" and multi "files" field names
+    const formData = await req.formData();
+    let file = formData.get("file") as File | null;
+    const context = (formData.get("context") as string) || "general";
 
-    // Validate and prepare files
-    const filesToUpload: Array<{ buffer: Buffer; name: string; mimeType: string }> = [];
+    // Backwards-compat: the old route used "files" (plural)
+    if (!file) {
+      const files = formData.getAll("files") as File[];
+      if (files.length > 0) {
+        // Multi-file upload — upload all and return legacy format
+        const results = [];
+        for (const f of files) {
+          if (f.size > MAX_SIZE) {
+            return NextResponse.json({ error: `File "${f.name}" exceeds 25MB limit` }, { status: 413 });
+          }
+          const buffer = Buffer.from(await f.arrayBuffer());
+          const result = await uploadBufferToCloudinary(buffer, {
+            folder: `bytereaper/${context}/${user.uid}`,
+            public_id: `${Date.now()}-${f.name.replace(/\.[^.]+$/, "")}`.slice(0, 100),
+            use_filename: true,
+            unique_filename: true,
+          });
+          const isImage = f.type?.startsWith("image/") || /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i.test(f.name);
+          results.push({
+            url: result.secure_url,
+            name: f.name,
+            provider: "cloudinary" as const,
+            type: isImage ? "image" : "file",
+            publicId: result.public_id,
+          });
+        }
 
-    for (const file of files) {
-      if (file.size > MAX_FILE_SIZE) {
-        return NextResponse.json(
-          { error: `File "${file.name}" exceeds 10MB limit` },
-          { status: 400 }
-        );
+        const images = results
+          .filter((r) => r.type === "image")
+          .map((r, i) => ({ url: r.url, name: r.name, provider: r.provider, label: `image${i + 1}` }));
+        const uploadedFiles = results
+          .filter((r) => r.type === "file")
+          .map((r, i) => ({ url: r.url, name: r.name, provider: r.provider, label: `file${i + 1}` }));
+
+        return NextResponse.json({
+          success: true,
+          images,
+          files: uploadedFiles,
+          totalUploaded: results.length,
+        });
       }
-
-      const arrayBuffer = await file.arrayBuffer();
-      filesToUpload.push({
-        buffer: Buffer.from(arrayBuffer),
-        name: file.name,
-        mimeType: normalizeMimeType(file),
-      });
     }
 
-    // Upload all files
-    const results = await uploadMultipleFiles(filesToUpload);
+    if (!(file instanceof File)) {
+      return NextResponse.json({ error: "No file provided" }, { status: 400 });
+    }
 
-    // Separate into images and files
-    const images = results
-      .filter((r) => r.type === 'image')
-      .map((r, i) => ({
-        url: r.url,
-        name: r.name,
-        provider: r.provider,
-        label: `image${i + 1}`,
-      }));
+    if (file.size > MAX_SIZE) {
+      return NextResponse.json({ error: "File too large (max 25MB)" }, { status: 413 });
+    }
 
-    const uploadedFiles = results
-      .filter((r) => r.type === 'file')
-      .map((r, i) => ({
-        url: r.url,
-        name: r.name,
-        provider: r.provider,
-        label: `file${i + 1}`,
-      }));
+    const buffer = Buffer.from(await file.arrayBuffer());
+
+    // 3. Upload to Cloudinary only
+    const result = await uploadBufferToCloudinary(buffer, {
+      folder: `bytereaper/${context}/${user.uid}`,
+      public_id: `${Date.now()}-${file.name.replace(/\.[^.]+$/, "")}`.slice(0, 100),
+      use_filename: true,
+      unique_filename: true,
+    });
 
     return NextResponse.json({
-      success: true,
-      images,
-      files: uploadedFiles,
-      totalUploaded: results.length,
+      url: result.secure_url,
+      publicId: result.public_id,
+      resourceType: result.resource_type,
+      bytes: result.bytes,
+      width: result.width,
+      height: result.height,
+      format: result.format,
+      originalName: file.name,
     });
-  } catch (error) {
-    console.error('[Upload API] Error:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Upload failed' },
-      { status: 500 }
-    );
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Upload failed";
+    console.error("[api/upload] error", err);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

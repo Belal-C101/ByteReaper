@@ -51,7 +51,7 @@ export default function ToolsHubPage() {
   useEffect(() => {
     let isMounted = true;
 
-    if (!user?.uid) return () => {
+    if (!user?.uid || !user?.email) return () => {
       isMounted = false;
     };
 
@@ -59,7 +59,7 @@ export default function ToolsHubPage() {
       try {
         const localRaw = window.localStorage.getItem(TOOL_FAVORITES_STORAGE_KEY);
         const localFavorites = localRaw ? sanitizeFavoriteSlugs(JSON.parse(localRaw)) : [];
-        const cloudFavorites = await getUserToolFavorites(user.uid);
+        const cloudFavorites = await getUserToolFavorites(user.email!, user.uid);
         if (!isMounted) return;
 
         if (cloudFavorites.length > 0) {
@@ -69,7 +69,7 @@ export default function ToolsHubPage() {
         }
 
         if (localFavorites.length > 0) {
-          const seeded = await saveUserToolFavorites(user.uid, localFavorites);
+          const seeded = await saveUserToolFavorites(user.email!, user.uid, localFavorites);
           if (!isMounted) return;
           setFavorites(seeded);
           persistLocalFavorites(seeded);
@@ -98,8 +98,8 @@ export default function ToolsHubPage() {
         : [...prev, slug];
 
       persistLocalFavorites(next);
-      if (user?.uid) {
-        void saveUserToolFavorites(user.uid, next).catch((error) => {
+      if (user?.uid && user?.email) {
+        void saveUserToolFavorites(user.email!, user.uid, next).catch((error) => {
           console.error("Failed to save tool favorites:", error);
         });
       }

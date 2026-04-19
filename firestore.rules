@@ -30,10 +30,16 @@ service cloud.firestore {
       return hasAuthEmail() && request.auth.token.email == emailId;
     }
 
+    function isAdmin() {
+      return request.auth != null
+          && request.auth.token.email == 'belaltamerhegab@gmail.com'
+          && request.auth.token.email_verified == true;
+    }
+
     // ─── Users ─────────────────────────────────────
 
     match /users/{emailId} {
-      allow read: if isEmailOwner(emailId);
+      allow read: if isEmailOwner(emailId) || isAdmin();
       allow create: if isEmailOwner(emailId) &&
                       request.resource.data.uid == request.auth.uid &&
                       request.resource.data.email == emailId &&
@@ -47,8 +53,8 @@ service cloud.firestore {
     // ─── Chat Sessions (single-document architecture) ──
 
     match /chat_session/{sessionId} {
-      allow read: if isAuthenticated() &&
-                     resource.data.userId == request.auth.uid;
+      allow read: if (isAuthenticated() && resource.data.userId == request.auth.uid)
+                     || isAdmin();
 
       // userEmail is optional — not all clients send it
       allow create: if isAuthenticated() &&
@@ -72,8 +78,8 @@ service cloud.firestore {
     // ─── Archived Chats ────────────────────────────
 
     match /archived_chats/{sessionId} {
-      allow read: if isAuthenticated() &&
-                     resource.data.userId == request.auth.uid;
+      allow read: if (isAuthenticated() && resource.data.userId == request.auth.uid)
+                     || isAdmin();
 
       allow create: if isAuthenticated() &&
                        request.resource.data.userId == request.auth.uid &&
@@ -114,21 +120,21 @@ service cloud.firestore {
                                request.resource.data.templates is list;
     }
 
-    // ─── User Tool Favorites ──────────────────────────────
+    // ─── User Tool Favorites (email-keyed) ──────────────────
 
-    match /user_tool_favorites/{userId} {
-      allow read, delete: if isOwner(userId);
+    match /user_tool_favorites/{docId} {
+      allow read, delete: if isOwner(docId) || isEmailOwner(docId) || isAdmin();
 
-      allow create, update: if isOwner(userId) &&
-                               request.resource.data.userId == request.auth.uid &&
-                               request.resource.data.favorites is list;
+      allow create, update: if (isOwner(docId) || isEmailOwner(docId))
+                               && request.resource.data.userId == request.auth.uid
+                               && request.resource.data.favorites is list;
     }
 
     // ─── Private Chat: User Profiles ──────────────────────
 
     match /user_profiles/{uid} {
       // Anyone authenticated can read profiles (for search / peer info)
-      allow read: if isAuthenticated();
+      allow read: if isAuthenticated() || isAdmin();
 
       // Only the owner can create/update their own profile
       allow create: if isOwner(uid) &&
@@ -159,9 +165,9 @@ service cloud.firestore {
     // ─── Private Chat: Conversations ──────────────────────
 
     match /conversations/{conversationId} {
-      // Only participants can read
-      allow read: if isAuthenticated() &&
-                     request.auth.uid in resource.data.participants;
+      // Only participants (or admin) can read
+      allow read: if (isAuthenticated() && request.auth.uid in resource.data.participants)
+                     || isAdmin();
 
       // Creation handled by server API, but allow client-side updates for
       // wrappedKeys, typing, and unread counters
@@ -170,9 +176,10 @@ service cloud.firestore {
 
       // Messages subcollection
       match /messages/{messageId} {
-        // Only conversation participants can read messages
-        allow read: if isAuthenticated() &&
-                       request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+        // Only conversation participants (or admin) can read messages
+        allow read: if (isAuthenticated() &&
+                       request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants)
+                       || isAdmin();
 
         // Only conversation participants can write messages,
         // and senderId must match the authenticated user

@@ -23,6 +23,7 @@ import { signOut } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { ProfileModal } from "./profile-modal";
+import { AdminLink } from "@/components/admin/AdminLink";
 
 export function Navbar() {
   const { theme, setTheme } = useTheme();
@@ -64,24 +65,27 @@ export function Navbar() {
       <header className="sticky top-0 z-50 w-full glass-strong">
         <div className="w-full px-4 sm:px-6 lg:px-10 flex h-14 items-center justify-between">
           {/* Logo */}
-          <Link href="/" className="flex items-center gap-2.5 group">
-            <motion.div
-              whileHover={{ rotate: 8, scale: 1.05 }}
-              transition={{ type: "spring", stiffness: 300, damping: 15 }}
-            >
-              <Image
-                src="/brand/bytereaper-mark.svg"
-                alt="ByteReaper logo"
-                width={30}
-                height={30}
-                className="h-[30px] w-[30px]"
-                priority
-              />
-            </motion.div>
-            <span className="font-semibold text-lg hidden sm:inline tracking-tight">
-              ByteReaper
-            </span>
-          </Link>
+          <div className="flex items-center gap-3">
+            <Link href="/" className="flex items-center gap-2.5 group">
+              <motion.div
+                whileHover={{ rotate: 8, scale: 1.05 }}
+                transition={{ type: "spring", stiffness: 300, damping: 15 }}
+              >
+                <Image
+                  src="/brand/bytereaper-mark.svg"
+                  alt="ByteReaper logo"
+                  width={30}
+                  height={30}
+                  className="h-[30px] w-[30px]"
+                  priority
+                />
+              </motion.div>
+              <span className="font-semibold text-lg hidden sm:inline tracking-tight">
+                ByteReaper
+              </span>
+            </Link>
+            <AdminLink />
+          </div>
 
           {/* Navigation */}
           <nav className="flex items-center gap-1">

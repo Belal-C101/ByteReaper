@@ -44,7 +44,6 @@ import type { IAgoraRTCClient, IMicrophoneAudioTrack, IRemoteAudioTrack } from "
 import {
   encryptMessage,
   decryptMessage,
-  generateConversationKey,
   wrapKeyForPeer,
   unwrapKey,
   generateIdentity,
@@ -453,6 +452,24 @@ function NewConversationModal({
 
 // ─── Message bubble ────────────────────────────────────────
 
+function buildAttachmentProxyUrl(
+  sourceUrl: string,
+  fileName: string,
+  disposition: "inline" | "attachment" = "inline"
+): string {
+  const params = new URLSearchParams({
+    url: sourceUrl,
+    name: fileName || "attachment",
+    disposition,
+  });
+  return `/api/file-proxy?${params.toString()}`;
+}
+
+function isImageAttachment(attachment?: ChatMessage["attachment"]): boolean {
+  if (!attachment) return false;
+  return attachment.resourceType === "image" || attachment.mime.startsWith("image/");
+}
+
 function MessageBubble({
   message,
   isOwn,
@@ -486,7 +503,7 @@ function MessageBubble({
 
         {message.attachment && (
           <div className="mb-1.5">
-            {message.attachment.resourceType === "image" ? (
+            {isImageAttachment(message.attachment) ? (
               <img
                 src={message.attachment.url}
                 alt={message.attachment.originalName}
@@ -494,7 +511,11 @@ function MessageBubble({
               />
             ) : (
               <a
-                href={message.attachment.url}
+                href={buildAttachmentProxyUrl(
+                  message.attachment.url,
+                  message.attachment.originalName || "attachment",
+                  "inline"
+                )}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-2 p-2 rounded-lg bg-background/30 hover:bg-background/50 transition-colors"
@@ -789,6 +810,53 @@ export default function PrivateChatPage() {
     decryptAll();
   }, [messages, privateKey, profile, activeConvId, conversations, convKeyCache, decryptedCache]);
 
+  const bootstrapConversationKey = useCallback(async (conversationId: string, conversation: Conversation) => {
+    if (!user || !profile) {
+      throw new Error("Encryption identity is not unlocked.");
+    }
+
+    const peerUid = conversation.participants.find((uid) => uid !== user.uid);
+    if (!peerUid) {
+      throw new Error("Conversation participant data is invalid.");
+    }
+
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) {
+      throw new Error("Not signed in.");
+    }
+
+    privateDebugLog("resolveConversationKey:bootstrap:start", { conversationId, peerUid });
+
+    const res = await fetch(`/api/conversations/${conversationId}/bootstrap-key`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const data = await res.json().catch(() => ({} as { error?: string; conversationKey?: string; peerPublicKey?: string }));
+    if (!res.ok) {
+      throw new Error(data.error || `Failed to reinitialize conversation key (HTTP ${res.status})`);
+    }
+
+    if (!data.conversationKey || !data.peerPublicKey) {
+      throw new Error("Bootstrap response missing encryption key metadata.");
+    }
+
+    const rawKey = fromBase64(data.conversationKey);
+    const myWrapped = await wrapKeyForPeer(rawKey, fromBase64(profile.publicKey));
+    const peerWrapped = await wrapKeyForPeer(rawKey, fromBase64(data.peerPublicKey));
+
+    await updateDoc(doc(db, "conversations", conversationId), {
+      [`wrappedKeys.${user.uid}`]: myWrapped,
+      [`wrappedKeys.${peerUid}`]: peerWrapped,
+    });
+
+    setConvKeyCache((prev) => ({ ...prev, [conversationId]: rawKey }));
+    privateDebugLog("resolveConversationKey:bootstrap:end", { conversationId, peerUid });
+    return rawKey;
+  }, [profile, user]);
+
   const resolveConversationKey = useCallback(async (conversationId: string) => {
     privateDebugLog("resolveConversationKey:start", { conversationId });
 
@@ -809,14 +877,26 @@ export default function PrivateChatPage() {
 
     const wrappedKey = conversation.wrappedKeys?.[profile.uid];
     if (!wrappedKey) {
-      throw new Error("Conversation key not available for current user.");
+      privateDebugLog("resolveConversationKey:missing-wrapped-key", {
+        conversationId,
+        profileUid: profile.uid,
+      });
+
+      try {
+        return await bootstrapConversationKey(conversationId, conversation);
+      } catch (bootstrapError) {
+        console.error("[ByteReaper] resolveConversationKey:bootstrap-error", bootstrapError);
+        throw new Error(
+          "Conversation key not available for current user. We tried to reinitialize encryption for this chat, but it failed."
+        );
+      }
     }
 
     const unwrapped = await unwrapKey(wrappedKey, fromBase64(profile.publicKey), privateKey);
     setConvKeyCache((prev) => ({ ...prev, [conversationId]: unwrapped }));
     privateDebugLog("resolveConversationKey:unwrapped", { conversationId });
     return unwrapped;
-  }, [convKeyCache, conversations, privateKey, profile]);
+  }, [bootstrapConversationKey, convKeyCache, conversations, privateKey, profile]);
 
   const cleanupActiveCall = useCallback(async (reason: string, markEnded = false) => {
     privateDebugLog("call:cleanup:start", {
@@ -974,13 +1054,16 @@ export default function PrivateChatPage() {
         const myWrapped = await wrapKeyForPeer(rawKey, fromBase64(profile.publicKey));
         const peerWrapped = await wrapKeyForPeer(rawKey, fromBase64(data.peerPublicKey));
 
-        // Update conversation with wrapped keys
-        await updateDoc(doc(db, "conversations", data.id), {
+        // Cache first so immediate sends don't race React state with Firestore sync.
+        setConvKeyCache((prev) => ({ ...prev, [data.id]: rawKey }));
+
+        // Persist wrapped keys asynchronously; cache keeps chat usable immediately.
+        void updateDoc(doc(db, "conversations", data.id), {
           [`wrappedKeys.${user.uid}`]: myWrapped,
           [`wrappedKeys.${peerUid}`]: peerWrapped,
+        }).catch((persistErr) => {
+          console.error("[ByteReaper] handleStartChat:persistWrappedKeys:error", persistErr);
         });
-
-        setConvKeyCache((prev) => ({ ...prev, [data.id]: rawKey }));
       }
 
       setActiveConvId(data.id);

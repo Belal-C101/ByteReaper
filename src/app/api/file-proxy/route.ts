@@ -25,6 +25,28 @@ function buildContentDisposition(disposition: "inline" | "attachment", fileName:
   return `${disposition}; filename="${asciiName}"; filename*=UTF-8''${encodedName}`;
 }
 
+function buildCloudinaryRawFallbackUrl(source: URL): string | null {
+  if (source.hostname !== "res.cloudinary.com") return null;
+  if (!source.pathname.includes("/image/upload/")) return null;
+
+  const lowerPath = source.pathname.toLowerCase();
+  const documentExts = [
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".ppt",
+    ".pptx",
+    ".txt",
+    ".csv",
+  ];
+
+  if (!documentExts.some((ext) => lowerPath.endsWith(ext))) return null;
+
+  return source.toString().replace("/image/upload/", "/raw/upload/");
+}
+
 export async function GET(request: NextRequest) {
   try {
     const sourceUrl = request.nextUrl.searchParams.get("url");
@@ -56,16 +78,36 @@ export async function GET(request: NextRequest) {
     const fileName = sanitizeFilename(rawName);
     const disposition = dispositionParam === "inline" ? "inline" : "attachment";
 
-    const upstream = await fetch(parsed.toString(), {
+    let upstream = await fetch(parsed.toString(), {
       method: "GET",
       redirect: "follow",
       cache: "no-store",
     });
 
     if (!upstream.ok || !upstream.body) {
+      const fallbackUrl = buildCloudinaryRawFallbackUrl(parsed);
+      if (fallbackUrl) {
+        const fallbackResponse = await fetch(fallbackUrl, {
+          method: "GET",
+          redirect: "follow",
+          cache: "no-store",
+        });
+
+        if (fallbackResponse.ok && fallbackResponse.body) {
+          upstream = fallbackResponse;
+        }
+      }
+    }
+
+    if (!upstream.ok || !upstream.body) {
+      const upstreamStatus = upstream.status;
       return NextResponse.json(
-        { error: `Failed to fetch remote file (status ${upstream.status})` },
-        { status: 502 }
+        {
+          error: `Failed to fetch remote file (status ${upstream.status})`,
+          upstreamStatus,
+          upstreamStatusText: upstream.statusText,
+        },
+        { status: upstreamStatus === 401 || upstreamStatus === 403 ? upstreamStatus : 502 }
       );
     }
 

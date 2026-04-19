@@ -173,6 +173,11 @@ The `setup-firebase.js` script automatically:
   - `NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME`
   - `NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET`
 
+### Document Delivery Notes
+- Private chat document links are served through `/api/file-proxy` for reliable open/download behavior.
+- New non-image uploads are stored with Cloudinary `raw` resource type to avoid PDF/document delivery failures that can happen on `image/upload` URLs.
+- If old PDF links still return `401` directly from `res.cloudinary.com`, re-upload the file so it is stored as `raw`, or enable PDF/ZIP delivery in Cloudinary security settings.
+
 ### Model Selection
 - Click the model selector in the top-right of the chat
 - Choose from 7 free AI models

@@ -47,8 +47,15 @@ export async function uploadToCloudinary(
     );
   }
 
-  // Use resource_type=auto so images, videos, PDFs, and raw source files all work.
-  const endpoint = `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`;
+  // Use explicit resource type so document files are stored as `raw` instead of `image`.
+  // This avoids Cloudinary document delivery issues on some accounts.
+  const resourceType = file.type.startsWith("image/")
+    ? "image"
+    : file.type.startsWith("video/") || file.type.startsWith("audio/")
+      ? "video"
+      : "raw";
+
+  const endpoint = `https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`;
 
   const formData = new FormData();
   formData.append("file", file);

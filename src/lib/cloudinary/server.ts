@@ -17,15 +17,31 @@ cloudinary.config({
   secure: true,
 });
 
+export class CloudinaryConfigError extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = "CloudinaryConfigError";
+  }
+}
+
+export function assertCloudinaryConfigured() {
+  if (!cloudName || !apiKey || !apiSecret) {
+    throw new CloudinaryConfigError(
+      "Cloudinary not configured: missing CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET"
+    );
+  }
+}
+
+export type CloudinaryResourceType = "image" | "raw" | "video";
+
 export async function uploadBufferToCloudinary(
   buffer: Buffer,
-  options: UploadApiOptions = {}
+  options: UploadApiOptions & { resource_type: CloudinaryResourceType }
 ): Promise<UploadApiResponse> {
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       {
         folder: process.env.CLOUDINARY_UPLOAD_FOLDER || "bytereaper",
-        resource_type: "auto", // image | video | raw auto-detected
         ...options,
       },
       (error, result) => {

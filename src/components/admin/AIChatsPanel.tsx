@@ -26,6 +26,9 @@ import {
   Clock,
   Archive,
   RefreshCw,
+  Download,
+  ExternalLink,
+  FileText,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
@@ -434,6 +437,39 @@ export function AIChatsPanel() {
   );
 }
 
+function AdminFileCard({ link }: { link: { url: string; name: string; provider?: string } }) {
+  const proxyHref = `/api/file-proxy?url=${encodeURIComponent(link.url)}&name=${encodeURIComponent(link.name)}&disposition=attachment`;
+  return (
+    <div className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-secondary/60 border border-border/30 text-xs">
+      <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+      <span className="truncate max-w-[160px] text-foreground" title={link.name}>
+        {link.name}
+      </span>
+      {link.provider && (
+        <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
+          {link.provider}
+        </Badge>
+      )}
+      <a
+        href={link.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Open in new tab"
+        className="text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <ExternalLink className="h-3.5 w-3.5" />
+      </a>
+      <a
+        href={proxyHref}
+        title="Download"
+        className="text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <Download className="h-3.5 w-3.5" />
+      </a>
+    </div>
+  );
+}
+
 function MessagePairView({ pair }: { pair: StoredMessagePair }) {
   const timestamp = getTimestamp(pair.timestamp);
 
@@ -471,32 +507,26 @@ function MessagePairView({ pair }: { pair: StoredMessagePair }) {
           {pair.fileLinks && pair.fileLinks.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-2">
               {pair.fileLinks.map((link, i) => (
-                <a
-                  key={i}
-                  href={link.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-secondary/60 hover:bg-secondary/80 text-xs text-muted-foreground hover:text-foreground transition-colors border border-border/30"
-                >
-                  {link.name}
-                </a>
+                <AdminFileCard key={i} link={link} />
               ))}
             </div>
           )}
 
-          {/* Attachment chips */}
-          {pair.userAttachments && pair.userAttachments.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mb-2">
-              {pair.userAttachments.map((att) => (
-                <span
-                  key={att.id}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-secondary/60 text-xs text-muted-foreground"
-                >
-                  {att.name}
-                </span>
-              ))}
-            </div>
-          )}
+          {/* Attachment chips — only when no file/image links exist */}
+          {!(pair.fileLinks?.length || pair.imageLinks?.length) &&
+            pair.userAttachments &&
+            pair.userAttachments.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {pair.userAttachments.map((att) => (
+                  <span
+                    key={att.id}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-secondary/60 text-xs text-muted-foreground"
+                  >
+                    {att.name}
+                  </span>
+                ))}
+              </div>
+            )}
 
           <div className="bg-primary text-primary-foreground px-4 py-2.5 rounded-2xl rounded-br-md">
             <div className="prose prose-sm max-w-none prose-invert [&_*]:text-primary-foreground/95">

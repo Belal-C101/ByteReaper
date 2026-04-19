@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const maxDuration = 30;
 
+const ALLOWED_HOSTS = new Set([
+  "res.cloudinary.com",
+  "tmpfiles.org",
+]);
+
 function sanitizeFilename(rawName: string | null): string {
   const fallback = "attachment";
   if (!rawName || rawName.trim().length === 0) return fallback;
@@ -37,8 +42,15 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Invalid source URL" }, { status: 400 });
     }
 
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return NextResponse.json({ error: "Only http/https URLs are supported" }, { status: 400 });
+    if (parsed.protocol !== "https:") {
+      return NextResponse.json({ error: "Only https URLs are supported" }, { status: 400 });
+    }
+
+    if (!ALLOWED_HOSTS.has(parsed.hostname)) {
+      return NextResponse.json(
+        { error: `Host "${parsed.hostname}" is not in the allowlist` },
+        { status: 403 }
+      );
     }
 
     const fileName = sanitizeFilename(rawName);

@@ -1588,7 +1588,7 @@ export function ChatInterface() {
     let modelUsedForExchange = selectedModel;
     const needsNewSession = !sessionId || isDraftSessionId(sessionId);
 
-    // Upload attachments to Cloudinary in background
+    // Upload attachments to Cloudinary (with tmpfiles fallback) in background
     let uploadedImageLinks: UploadedMediaLink[] = [];
     let uploadedFileLinks: UploadedMediaLink[] = [];
 
@@ -1626,7 +1626,7 @@ export function ChatInterface() {
         }
 
         const uploadController = new AbortController();
-        const uploadTimeout = window.setTimeout(() => uploadController.abort(), 15000);
+        const uploadTimeout = window.setTimeout(() => uploadController.abort(), 60_000);
 
         const uploadToken = user ? await user.getIdToken() : undefined;
         const uploadRes = await fetch('/api/upload', {
@@ -1637,8 +1637,10 @@ export function ChatInterface() {
         }).finally(() => {
           window.clearTimeout(uploadTimeout);
         });
-        if (uploadRes.ok) {
-          const uploadData = await uploadRes.json();
+
+        const uploadData = await uploadRes.json().catch(() => ({} as Record<string, unknown>));
+
+        if (uploadRes.ok && uploadData?.success) {
           const normalizedImages = normalizeUploadedMediaLinks(uploadData.images);
           const normalizedFiles = normalizeUploadedMediaLinks(uploadData.files);
 
@@ -1646,44 +1648,32 @@ export function ChatInterface() {
           uploadedImageLinks = linkSet.imageLinks;
           uploadedFileLinks = linkSet.fileLinks;
 
-          console.info('[Upload] Cloud OK — imageLinks:', uploadedImageLinks.length, 'fileLinks:', uploadedFileLinks.length);
+          const uploadErrors = Array.isArray(uploadData.errors) ? uploadData.errors : [];
+          console.info('[Upload] OK — images:', uploadedImageLinks.length, 'files:', uploadedFileLinks.length,
+            'providers:', [...uploadedImageLinks, ...uploadedFileLinks].map(l => l.provider).join(',') || 'none',
+            'errors:', uploadErrors.length);
+
+          if (uploadErrors.length > 0) {
+            console.warn('[Upload] partial failures:', uploadErrors);
+          }
         } else {
-          console.warn('[Upload] Server returned non-OK response:', uploadRes.status);
+          const reason = uploadData?.errors?.[0]?.reason || uploadData?.message || uploadData?.error || `HTTP ${uploadRes.status}`;
+          throw new Error(reason as string);
         }
       } catch (uploadErr) {
-        console.error('[Upload] Cloud upload failed:', uploadErr);
-        // Continue — we still have the local attachments for AI analysis
+        console.error('[Upload] FAILED:', uploadErr);
+        setChatError(`File upload failed: ${uploadErr instanceof Error ? uploadErr.message : 'unknown error'}. Please retry.`);
+        setIsUploading(false);
+        setIsLoading(false);
+        return; // ABORT — do not send message with no links
       } finally {
         setIsUploading(false);
       }
     }
 
-    // Fallback: for any attachment that wasn't cloud-hosted, store a data URL
-    // so fileLinks is NEVER null in Firestore. The background migration useEffect
-    // will re-upload these data URLs to a real host when the chat is next loaded.
-    const DATA_URL_FALLBACK_MAX = 512 * 1024; // 512KB
-    for (const att of attachments) {
-      if (!att.content) continue;
-      const attType = getFileType({ name: att.name, type: att.type });
-      const isImage = attType === "image";
-      const pool = isImage ? uploadedImageLinks : uploadedFileLinks;
-      if (pool.some((link) => link.name === att.name)) continue;
-      if (att.size > DATA_URL_FALLBACK_MAX) continue;
-
-      let dataUrl: string;
-      if (att.content.startsWith("data:")) {
-        dataUrl = att.content;
-      } else {
-        const mime = resolveMimeType({ name: att.name, type: att.type });
-        const encoded = btoa(unescape(encodeURIComponent(att.content)));
-        dataUrl = `data:${mime};base64,${encoded}`;
-      }
-      pool.push({ url: dataUrl, name: att.name, provider: "local" });
-    }
-
     if (attachments.length > 0) {
       console.info('[Upload] Final counts — imageLinks:', uploadedImageLinks.length, 'fileLinks:', uploadedFileLinks.length,
-        'providers:', uploadedFileLinks.map(l => l.provider).join(',') || 'none');
+        'providers:', [...uploadedImageLinks, ...uploadedFileLinks].map(l => l.provider).join(',') || 'none');
     }
 
     const userMessage: ChatMessage = {

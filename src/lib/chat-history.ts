@@ -467,31 +467,18 @@ export async function saveChatExchange(
     const imageLinks = sanitizeMediaLinksForStorage(userMessage.imageLinks);
     const fileLinks = sanitizeMediaLinksForStorage(userMessage.fileLinks);
 
-    // Safety net: if fileLinks/imageLinks are empty but attachments still carry content,
-    // derive data-URL links here so files are NEVER lost in Firestore.
-    if (userMessage.attachments && userMessage.attachments.length > 0) {
-      const DATA_URL_CEILING = 400 * 1024; // keep well under Firestore 1 MB doc limit
-      for (const att of userMessage.attachments) {
-        if (!att.content) continue;
-        if (att.size > DATA_URL_CEILING) continue;
-
-        const isImage = att.type?.startsWith('image/') ?? false;
-        const bucket = isImage ? imageLinks : fileLinks;
-        if (bucket.some((l) => l.name === att.name)) continue;
-
-        let url: string;
-        if (att.content.startsWith('data:')) {
-          url = att.content;
-        } else {
-          try {
-            url = `data:${att.type || 'application/octet-stream'};base64,${btoa(unescape(encodeURIComponent(att.content)))}`;
-          } catch {
-            console.warn('[saveChatExchange] Could not encode attachment as data URL:', att.name);
-            continue;
-          }
-        }
-        bucket.push({ url, name: att.name, provider: 'local' });
-      }
+    // Assertion: client now aborts on upload failure, so we should never arrive
+    // here with attachments but zero links unless the message had no file content.
+    if (
+      userMessage.attachments &&
+      userMessage.attachments.length > 0 &&
+      imageLinks.length === 0 &&
+      fileLinks.length === 0
+    ) {
+      console.warn(
+        '[saveChatExchange] attachments present but zero imageLinks/fileLinks — client should have aborted.',
+        userMessage.attachments.map((a) => a.name)
+      );
     }
 
     const messagePair: MessagePair = {

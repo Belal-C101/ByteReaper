@@ -23,6 +23,7 @@ export async function uploadFile(
 
   const result = await uploadBufferToCloudinary(fileBuffer, {
     folder: `bytereaper`,
+    resource_type: isImage ? 'image' : 'raw',
     use_filename: true,
     unique_filename: true,
   });

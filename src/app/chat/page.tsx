@@ -908,7 +908,7 @@ export default function PrivateChatPage() {
       if (mediaType === "audio" && remoteUser.audioTrack) {
         remoteAudioTrackRef.current = remoteUser.audioTrack;
         if (remoteAudioRef.current) {
-          remoteUser.audioTrack.play(remoteAudioRef.current);
+          remoteUser.audioTrack.play();
         } else {
           remoteUser.audioTrack.play();
         }

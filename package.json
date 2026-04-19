@@ -42,7 +42,7 @@
     "js-md5": "^0.8.3",
     "js-yaml": "^4.1.1",
     "leaflet": "^1.9.4",
-    "libsodium-wrappers": "^0.8.2",
+    "libsodium-wrappers-sumo": "^0.8.4",
     "lucide-react": "^0.479.0",
     "mammoth": "^1.8.0",
     "next": "^15.2.4",

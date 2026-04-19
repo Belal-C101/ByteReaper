@@ -1,6 +1,6 @@
 "use client";
 
-import sodium from "libsodium-wrappers";
+import sodium from "libsodium-wrappers-sumo";
 
 let _ready = false;
 

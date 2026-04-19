@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertCloudinaryConfigured, cloudinary } from "@/lib/cloudinary/server";
 
 export const maxDuration = 30;
 
@@ -45,6 +46,58 @@ function buildCloudinaryRawFallbackUrl(source: URL): string | null {
   if (!documentExts.some((ext) => lowerPath.endsWith(ext))) return null;
 
   return source.toString().replace("/image/upload/", "/raw/upload/");
+}
+
+function parseCloudinaryAssetFromUrl(source: URL): {
+  resourceType: "image" | "raw" | "video";
+  deliveryType: string;
+  publicId: string;
+} | null {
+  if (source.hostname !== "res.cloudinary.com") return null;
+
+  const segments = source.pathname.split("/").filter(Boolean);
+  if (segments.length < 5) return null;
+
+  // /<cloudName>/<resourceType>/<deliveryType>/<version>/<publicId>
+  const resourceType = segments[1];
+  if (resourceType !== "image" && resourceType !== "raw" && resourceType !== "video") {
+    return null;
+  }
+
+  const deliveryType = segments[2];
+  const tail = segments.slice(3);
+  const versionIndex = tail.findIndex((segment) => /^v\d+$/.test(segment));
+  const publicIdSegments = versionIndex >= 0 ? tail.slice(versionIndex + 1) : tail;
+
+  if (publicIdSegments.length === 0) return null;
+
+  return {
+    resourceType,
+    deliveryType,
+    publicId: decodeURIComponent(publicIdSegments.join("/")),
+  };
+}
+
+function buildCloudinarySignedUrl(source: URL): string | null {
+  const parsed = parseCloudinaryAssetFromUrl(source);
+  if (!parsed) return null;
+
+  try {
+    assertCloudinaryConfigured();
+  } catch {
+    return null;
+  }
+
+  try {
+    return cloudinary.url(parsed.publicId, {
+      resource_type: parsed.resourceType,
+      type: parsed.deliveryType,
+      secure: true,
+      sign_url: true,
+    });
+  } catch {
+    return null;
+  }
 }
 
 export async function GET(request: NextRequest) {
@@ -95,6 +148,21 @@ export async function GET(request: NextRequest) {
 
         if (fallbackResponse.ok && fallbackResponse.body) {
           upstream = fallbackResponse;
+        }
+      }
+    }
+
+    if ((!upstream.ok || !upstream.body) && (upstream.status === 401 || upstream.status === 403)) {
+      const signedUrl = buildCloudinarySignedUrl(parsed);
+      if (signedUrl) {
+        const signedResponse = await fetch(signedUrl, {
+          method: "GET",
+          redirect: "follow",
+          cache: "no-store",
+        });
+
+        if (signedResponse.ok && signedResponse.body) {
+          upstream = signedResponse;
         }
       }
     }

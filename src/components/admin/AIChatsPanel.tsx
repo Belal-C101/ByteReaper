@@ -438,6 +438,7 @@ export function AIChatsPanel() {
 }
 
 function AdminFileCard({ link }: { link: { url: string; name: string; provider?: string } }) {
+  const proxyOpenHref = `/api/file-proxy?url=${encodeURIComponent(link.url)}&name=${encodeURIComponent(link.name)}&disposition=inline`;
   const proxyHref = `/api/file-proxy?url=${encodeURIComponent(link.url)}&name=${encodeURIComponent(link.name)}&disposition=attachment`;
   return (
     <div className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-secondary/60 border border-border/30 text-xs">
@@ -451,7 +452,7 @@ function AdminFileCard({ link }: { link: { url: string; name: string; provider?:
         </Badge>
       )}
       <a
-        href={link.url}
+        href={proxyOpenHref}
         target="_blank"
         rel="noopener noreferrer"
         title="Open in new tab"

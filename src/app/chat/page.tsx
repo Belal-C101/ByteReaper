@@ -2018,7 +2018,7 @@ export default function PrivateChatPage() {
       privateDebugLog("incomingCallEffect:cleanup", { uid: user.uid });
       unsubscribe();
     };
-  }, [cleanupAgoraClient, cleanupCallUI, computeCallDurationSec, joinVoiceChannel, peerProfiles, sendCallSummaryOnce, user]);
+  }, [cleanupAgoraClient, cleanupCallUI, cleanupCallerListeners, computeCallDurationSec, joinVoiceChannel, peerProfiles, sendCallSummaryOnce, user]);
 
   // ── Peer info helper ─────────────────────────────────────
 

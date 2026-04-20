@@ -18,6 +18,9 @@ import {
   getDocs,
   setDoc,
   limit,
+  arrayUnion,
+  writeBatch,
+  deleteDoc,
 } from "firebase/firestore";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -37,6 +40,12 @@ import {
   X,
   Bot,
   PhoneOff,
+  Check,
+  CheckCheck,
+  Clock,
+  PhoneIncoming,
+  PhoneCall,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -468,14 +477,34 @@ function MessageBubble({
   message,
   isOwn,
   decryptedText,
+  peerUid,
 }: {
   message: ChatMessage;
   isOwn: boolean;
   decryptedText: string | null;
+  peerUid?: string;
 }) {
   const time = message.createdAt instanceof Timestamp
     ? message.createdAt.toDate().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : "";
+
+  // Determine read-receipt status for own messages
+  const isPending = (message as ChatMessage & { _pending?: boolean })._pending;
+  const isFailed = (message as ChatMessage & { _failed?: boolean })._failed;
+  const isRead = isOwn && peerUid ? message.readBy?.includes(peerUid) : false;
+
+  // System messages (call summaries) render differently
+  if (message.type === "system") {
+    return (
+      <div className="flex justify-center px-4 py-1">
+        <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-muted/50 text-muted-foreground">
+          <PhoneCall className="h-3 w-3" />
+          <span className="text-[11px]">{decryptedText || "Call"}</span>
+          {time && <span className="text-[10px] opacity-60">· {time}</span>}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`flex ${isOwn ? "justify-end" : "justify-start"} px-4 py-0.5`}>
@@ -527,15 +556,26 @@ function MessageBubble({
         </p>
 
         <p
-          className={`text-[10px] mt-0.5 ${
+          className={`text-[10px] mt-0.5 flex items-center gap-1 ${
             message.type === "ai"
               ? "text-primary/50"
               : isOwn
                 ? "text-primary-foreground/50"
                 : "text-muted-foreground/50"
-          }`}
+          } ${isOwn ? "justify-end" : ""}`}
         >
           {time}
+          {isOwn && (
+            isPending ? (
+              <Clock className="h-3 w-3 opacity-60" />
+            ) : isFailed ? (
+              <span className="text-destructive font-medium">!</span>
+            ) : isRead ? (
+              <CheckCheck className="h-3 w-3 text-blue-400" />
+            ) : (
+              <CheckCheck className="h-3 w-3 opacity-60" />
+            )
+          )}
         </p>
       </div>
     </div>
@@ -637,6 +677,91 @@ function VoiceCallOverlay({
   );
 }
 
+// ─── Incoming call modal ──────────────────────────────────
+
+function IncomingCallModal({
+  peerName,
+  onAnswer,
+  onDecline,
+}: {
+  peerName: string;
+  onAnswer: () => void;
+  onDecline: () => void;
+}) {
+  // Auto-decline after 60 seconds
+  useEffect(() => {
+    const timer = setTimeout(onDecline, 60_000);
+    return () => clearTimeout(timer);
+  }, [onDecline]);
+
+  // Play ringtone using Web Audio API (no file needed)
+  useEffect(() => {
+    let ctx: AudioContext | null = null;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+
+    try {
+      ctx = new AudioContext();
+      // Ring pattern: two-tone beep every 2 seconds
+      const playBeep = () => {
+        if (!ctx || ctx.state === "closed") return;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.setValueAtTime(440, ctx.currentTime);
+        osc.frequency.setValueAtTime(520, ctx.currentTime + 0.15);
+        gain.gain.setValueAtTime(0.3, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.4);
+      };
+      playBeep();
+      intervalId = setInterval(playBeep, 2000);
+    } catch { /* AudioContext not available */ }
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+      if (ctx && ctx.state !== "closed") ctx.close().catch(() => {});
+    };
+  }, []);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.9 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.9 }}
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-background/80 backdrop-blur-sm"
+    >
+      <div className="w-full max-w-xs mx-4 rounded-2xl border border-border bg-card p-6 shadow-xl text-center">
+        <div className="h-16 w-16 rounded-full bg-green-500/10 flex items-center justify-center mx-auto mb-4">
+          <PhoneIncoming className="h-8 w-8 text-green-500 animate-pulse" />
+        </div>
+        <h3 className="text-lg font-semibold">{peerName}</h3>
+        <p className="text-sm text-muted-foreground mb-6">Incoming voice call...</p>
+        <div className="flex items-center justify-center gap-6">
+          <Button
+            variant="destructive"
+            size="icon"
+            className="h-14 w-14 rounded-full"
+            onClick={onDecline}
+            aria-label="Decline call"
+          >
+            <PhoneOff className="h-6 w-6" />
+          </Button>
+          <Button
+            size="icon"
+            className="h-14 w-14 rounded-full bg-green-500 hover:bg-green-600 text-white"
+            onClick={onAnswer}
+            aria-label="Answer call"
+          >
+            <Phone className="h-6 w-6" />
+          </Button>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 // ─── Main chat page ────────────────────────────────────────
 
 export default function PrivateChatPage() {
@@ -665,6 +790,13 @@ export default function PrivateChatPage() {
   const [showNewConv, setShowNewConv] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
   const [callStatus, setCallStatus] = useState<{ peerName: string; status: "ringing" | "connected" } | null>(null);
+  const [incomingCall, setIncomingCall] = useState<{
+    callDocId: string;
+    channelName: string;
+    conversationId: string;
+    callerId: string;
+    peerName: string;
+  } | null>(null);
   const [isMuted, setIsMuted] = useState(false);
   const [isSpeakerOn, setIsSpeakerOn] = useState(true);
   const [startChatError, setStartChatError] = useState<string | null>(null);
@@ -790,6 +922,23 @@ export default function PrivateChatPage() {
       (snap) => {
         const msgs = snap.docs.map((d) => ({ id: d.id, ...d.data() } as ChatMessage));
         setMessages(msgs);
+
+        // Mark peer messages as read (write readBy for this user)
+        const unreadFromPeer = msgs.filter(
+          (m) => m.senderId !== user.uid && (!m.readBy || !m.readBy.includes(user.uid))
+        );
+        if (unreadFromPeer.length > 0) {
+          const batch = writeBatch(db);
+          unreadFromPeer.forEach((m) => {
+            batch.update(doc(db, "conversations", activeConvId, "messages", m.id), {
+              readBy: arrayUnion(user.uid),
+            });
+          });
+          batch.commit().catch((err) => {
+            console.error("[ByteReaper] readBy:batch:error", err);
+          });
+        }
+
         // Scroll to bottom
         setTimeout(() => {
           virtuosoRef.current?.scrollToIndex({ index: msgs.length - 1, behavior: "smooth" });
@@ -1138,6 +1287,62 @@ export default function PrivateChatPage() {
     privateDebugLog("call:join:end", { channelName, peerName });
   }, [cleanupActiveCall, user]);
 
+  // ── Send a system message for call events ─────────────────
+
+  const sendCallSummary = useCallback(async (conversationId: string, summaryText: string) => {
+    try {
+      const convKey = await resolveConversationKey(conversationId);
+      const { ciphertext, iv } = await encryptMessage(summaryText, convKey);
+      const token = await auth.currentUser?.getIdToken();
+      await fetch(`/api/conversations/${conversationId}/messages`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ type: "system", ciphertext, iv }),
+      });
+    } catch (err) {
+      console.error("[ByteReaper] sendCallSummary:error", err);
+    }
+  }, [resolveConversationKey]);
+
+  // ── Answer / Decline incoming call ──────────────────────
+
+  const handleAnswerCall = useCallback(async () => {
+    if (!incomingCall) return;
+    const { callDocId, channelName, conversationId, peerName } = incomingCall;
+    setIncomingCall(null);
+
+    try {
+      await updateDoc(doc(db, "calls", callDocId), {
+        status: "accepted",
+        acceptedAt: serverTimestamp(),
+      });
+      setCallStatus({ peerName, status: "ringing" });
+      await joinVoiceChannel(channelName, conversationId, peerName);
+    } catch (err) {
+      console.error("[ByteReaper] handleAnswerCall:error", err);
+      setActionError(err instanceof Error ? err.message : "Failed to answer call.");
+    }
+  }, [incomingCall, joinVoiceChannel]);
+
+  const handleDeclineCall = useCallback(async () => {
+    if (!incomingCall) return;
+    const { callDocId, conversationId } = incomingCall;
+    setIncomingCall(null);
+
+    try {
+      await updateDoc(doc(db, "calls", callDocId), {
+        status: "rejected",
+        endedAt: serverTimestamp(),
+      });
+      await sendCallSummary(conversationId, "Voice call · Declined");
+    } catch (err) {
+      console.error("[ByteReaper] handleDeclineCall:error", err);
+    }
+  }, [incomingCall, sendCallSummary]);
+
   // ── Unlock handler ───────────────────────────────────────
 
   const handleUnlock = (pk: Uint8Array) => {
@@ -1212,6 +1417,25 @@ export default function PrivateChatPage() {
     setInputText("");
     setSending(true);
 
+    // Optimistic: insert a pending message immediately
+    const tempId = `_pending_${Date.now()}`;
+    const optimisticMsg: ChatMessage & { _pending?: boolean; _plaintext?: string } = {
+      id: tempId,
+      senderId: user.uid,
+      createdAt: Timestamp.now(),
+      type: "text",
+      ciphertext: "",
+      iv: "",
+      readBy: [user.uid],
+      _pending: true,
+      _plaintext: text,
+    };
+    setMessages((prev) => [...prev, optimisticMsg]);
+    setDecryptedCache((prev) => ({ ...prev, [tempId]: text }));
+    setTimeout(() => {
+      virtuosoRef.current?.scrollToIndex({ index: messages.length, behavior: "smooth" });
+    }, 50);
+
     try {
       const convKey = await resolveConversationKey(activeConvId);
 
@@ -1241,6 +1465,14 @@ export default function PrivateChatPage() {
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
+
+      // Remove optimistic message — the onSnapshot listener will deliver the real one
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
+      setDecryptedCache((prev) => {
+        const next = { ...prev };
+        delete next[tempId];
+        return next;
+      });
 
       // If AI mention, trigger the mention API
       if (hasMention) {
@@ -1279,6 +1511,12 @@ export default function PrivateChatPage() {
     } catch (err) {
       console.error("[ByteReaper] handleSend:error", err);
       setActionError(err instanceof Error ? err.message : "Failed to send message.");
+      // Mark optimistic message as failed instead of removing
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === tempId ? { ...m, _pending: false, _failed: true } as ChatMessage & { _pending?: boolean; _failed?: boolean } : m
+        )
+      );
       setInputText(text); // Restore text on failure
     } finally {
       setSending(false);
@@ -1415,6 +1653,45 @@ export default function PrivateChatPage() {
 
   // ── Voice call ───────────────────────────────────────────
 
+  const callerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const callerCallUnsubRef = useRef<(() => void) | null>(null);
+
+  // Cleanup caller-side listeners
+  const cleanupCallerListeners = useCallback(() => {
+    if (callerTimeoutRef.current) {
+      clearTimeout(callerTimeoutRef.current);
+      callerTimeoutRef.current = null;
+    }
+    if (callerCallUnsubRef.current) {
+      callerCallUnsubRef.current();
+      callerCallUnsubRef.current = null;
+    }
+  }, []);
+
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDeleteConversation = async () => {
+    if (!activeConvId || !user) return;
+    setDeleting(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch(`/api/conversations/${activeConvId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error("Failed to delete");
+      setShowDeleteConfirm(false);
+      setActiveConvId(null);
+      setMessages([]);
+    } catch (err) {
+      console.error("Delete conversation error:", err);
+      setActionError("Failed to delete conversation");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const handleVoiceCall = async () => {
     privateDebugLog("handleVoiceCall:start", { activeConvId, hasUser: Boolean(user) });
     if (!activeConvId || !user || !activeConversation) return;
@@ -1427,6 +1704,7 @@ export default function PrivateChatPage() {
     try {
       setActionError(null);
       const channelName = `br_${activeConvId}`;
+      const convId = activeConvId;
 
       // Create call document in Firestore
       await setDoc(doc(db, "calls", channelName), {
@@ -1441,10 +1719,64 @@ export default function PrivateChatPage() {
 
       setCallStatus({ peerName, status: "ringing" });
       await joinVoiceChannel(channelName, activeConvId, peerName);
+
+      // 60s timeout — if still ringing, mark as missed
+      callerTimeoutRef.current = setTimeout(async () => {
+        try {
+          const callSnap = await getDoc(doc(db, "calls", channelName));
+          if (callSnap.exists() && callSnap.data().status === "ringing") {
+            await updateDoc(doc(db, "calls", channelName), {
+              status: "missed",
+              endedAt: serverTimestamp(),
+            });
+            await cleanupActiveCall("caller-timeout", false);
+            await sendCallSummary(convId, "Voice call · Missed");
+          }
+        } catch (e) {
+          console.error("[ByteReaper] callerTimeout:error", e);
+        }
+        cleanupCallerListeners();
+      }, 60_000);
+
+      // Listen for callee response (rejected/accepted/ended)
+      callerCallUnsubRef.current = onSnapshot(doc(db, "calls", channelName), async (snap) => {
+        const data = snap.data();
+        if (!data) return;
+        if (data.status === "rejected") {
+          cleanupCallerListeners();
+          await cleanupActiveCall("callee-rejected", false);
+          await sendCallSummary(convId, "Voice call · Declined");
+        } else if (data.status === "missed") {
+          cleanupCallerListeners();
+          await cleanupActiveCall("callee-missed", false);
+        } else if (data.status === "accepted") {
+          // Clear timeout — call is active now
+          if (callerTimeoutRef.current) {
+            clearTimeout(callerTimeoutRef.current);
+            callerTimeoutRef.current = null;
+          }
+        } else if (data.status === "ended" && activeCallChannelRef.current === channelName) {
+          // Compute duration for summary
+          cleanupCallerListeners();
+          const acceptedAt = data.acceptedAt?.toDate?.();
+          const endedAt = data.endedAt?.toDate?.();
+          if (acceptedAt && endedAt) {
+            const durationSec = Math.round((endedAt.getTime() - acceptedAt.getTime()) / 1000);
+            const mins = Math.floor(durationSec / 60);
+            const secs = durationSec % 60;
+            await sendCallSummary(
+              convId,
+              `Voice call · ${mins}:${secs.toString().padStart(2, "0")}`
+            );
+          }
+          await cleanupActiveCall("call-ended-normally", false);
+        }
+      });
     } catch (err) {
       console.error("[ByteReaper] handleVoiceCall:error", err);
       setActionError(err instanceof Error ? err.message : "Voice call failed.");
       setCallStatus(null);
+      cleanupCallerListeners();
     } finally {
       privateDebugLog("handleVoiceCall:end", { activeConvId });
     }
@@ -1452,6 +1784,7 @@ export default function PrivateChatPage() {
 
   const handleEndCall = async () => {
     privateDebugLog("handleEndCall:start", { channelName: activeCallChannelRef.current });
+    cleanupCallerListeners();
     await cleanupActiveCall("manual-end-call", true);
     privateDebugLog("handleEndCall:end");
   };
@@ -1488,6 +1821,7 @@ export default function PrivateChatPage() {
             status: "ringing" | "accepted" | "rejected" | "ended" | "missed";
           };
 
+          // Show incoming call modal instead of auto-accepting
           if (
             callData.status === "ringing" &&
             acceptedIncomingCallIdRef.current !== callDoc.id &&
@@ -1499,20 +1833,22 @@ export default function PrivateChatPage() {
               peerProfiles[callData.callerId]?.username ||
               "User";
 
-            setCallStatus({ peerName, status: "ringing" });
-            await updateDoc(doc(db, "calls", callDoc.id), {
-              status: "accepted",
-              acceptedAt: serverTimestamp(),
-            }).catch((updateErr) => {
-              console.error("[ByteReaper] incomingCallEffect:accept-error", updateErr);
+            setIncomingCall({
+              callDocId: callDoc.id,
+              channelName: callData.channelName,
+              conversationId: callData.conversationId,
+              callerId: callData.callerId,
+              peerName,
             });
+          }
 
-            try {
-              await joinVoiceChannel(callData.channelName, callData.conversationId, peerName);
-            } catch (joinErr) {
-              console.error("[ByteReaper] incomingCallEffect:join-error", joinErr);
-              setActionError(joinErr instanceof Error ? joinErr.message : "Failed to join incoming call.");
-            }
+          // Caller dismissed the call (missed/rejected) while we still show the modal
+          if (
+            (callData.status === "missed" || callData.status === "rejected") &&
+            acceptedIncomingCallIdRef.current === callDoc.id
+          ) {
+            setIncomingCall(null);
+            acceptedIncomingCallIdRef.current = null;
           }
 
           if (
@@ -1520,6 +1856,7 @@ export default function PrivateChatPage() {
             activeCallChannelRef.current &&
             activeCallChannelRef.current === callData.channelName
           ) {
+            cleanupCallerListeners();
             await cleanupActiveCall("remote-ended-call", false);
           }
         }
@@ -1589,6 +1926,17 @@ export default function PrivateChatPage() {
             onToggleMute={toggleMute}
             isSpeakerOn={isSpeakerOn}
             onToggleSpeaker={toggleSpeaker}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Incoming call modal */}
+      <AnimatePresence>
+        {incomingCall && !callStatus && (
+          <IncomingCallModal
+            peerName={incomingCall.peerName}
+            onAnswer={handleAnswerCall}
+            onDecline={handleDeclineCall}
           />
         )}
       </AnimatePresence>
@@ -1758,8 +2106,62 @@ export default function PrivateChatPage() {
                 >
                   <Phone className="h-4 w-4" />
                 </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                  title="Delete conversation"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
               </div>
             </div>
+
+            {/* Delete confirmation dialog */}
+            <AnimatePresence>
+              {showDeleteConfirm && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+                  onClick={() => !deleting && setShowDeleteConfirm(false)}
+                >
+                  <motion.div
+                    initial={{ scale: 0.95, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    exit={{ scale: 0.95, opacity: 0 }}
+                    onClick={(e) => e.stopPropagation()}
+                    className="bg-background border border-border rounded-xl p-6 max-w-sm w-full shadow-xl space-y-4"
+                  >
+                    <h3 className="text-lg font-semibold">Delete conversation?</h3>
+                    <p className="text-sm text-muted-foreground">
+                      This will permanently delete all messages for both participants. This action cannot be undone.
+                    </p>
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        variant="ghost"
+                        onClick={() => setShowDeleteConfirm(false)}
+                        disabled={deleting}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        onClick={handleDeleteConversation}
+                        disabled={deleting}
+                      >
+                        {deleting ? (
+                          <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        ) : null}
+                        Delete
+                      </Button>
+                    </div>
+                  </motion.div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             {/* Messages */}
             <div className="flex-1 overflow-hidden">
@@ -1774,6 +2176,7 @@ export default function PrivateChatPage() {
                     message={msg}
                     isOwn={msg.senderId === user.uid}
                     decryptedText={decryptedCache[msg.id] ?? null}
+                    peerUid={activeConversation?.participants.find((p) => p !== user.uid)}
                   />
                 )}
               />

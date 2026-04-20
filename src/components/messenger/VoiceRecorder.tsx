@@ -212,6 +212,8 @@ export function VoiceBubble({ url, durationSec }: VoiceBubbleProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
+  // Use the recorded durationSec as the authoritative source —
+  // WebM metadata often reports Infinity until fully buffered.
   const [duration, setDuration] = useState(durationSec || 0);
   const [playbackRate, setPlaybackRate] = useState(1);
 
@@ -221,7 +223,10 @@ export function VoiceBubble({ url, durationSec }: VoiceBubbleProps) {
     if (playing) {
       el.pause();
     } else {
-      el.play();
+      el.play().catch(() => {
+        // iOS Safari requires user gesture — silently ignore,
+        // the user will tap again.
+      });
     }
   };
 
@@ -231,19 +236,39 @@ export function VoiceBubble({ url, durationSec }: VoiceBubbleProps) {
     if (audioRef.current) audioRef.current.playbackRate = next;
   };
 
+  // Force stop when currentTime reaches the recorded duration.
+  // This handles the case where onEnded never fires (WebM with Infinity duration).
+  const handleTimeUpdate = () => {
+    const el = audioRef.current;
+    if (!el) return;
+    const t = el.currentTime;
+    const cap = durationSec || duration;
+    if (cap > 0 && t >= cap) {
+      el.pause();
+      el.currentTime = 0;
+      setPlaying(false);
+      setCurrentTime(0);
+      return;
+    }
+    setCurrentTime(t);
+  };
+
   return (
     <div className="flex items-center gap-2 min-w-[180px]">
       <audio
         ref={audioRef}
         src={url}
-        preload="metadata"
+        preload="auto"
+        playsInline
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
         onEnded={() => { setPlaying(false); setCurrentTime(0); }}
-        onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime || 0)}
+        onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={() => {
           const d = audioRef.current?.duration;
-          if (d && isFinite(d)) setDuration(d);
+          // Only update from metadata if it's a finite value and we don't
+          // already have a recording-time duration.
+          if (d && isFinite(d) && !durationSec) setDuration(d);
         }}
       />
       <Button
@@ -267,19 +292,20 @@ export function VoiceBubble({ url, durationSec }: VoiceBubbleProps) {
         <input
           type="range"
           min={0}
-          max={duration || 1}
+          max={durationSec || duration || 1}
           step={0.1}
-          value={currentTime}
+          value={Math.min(currentTime, durationSec || duration || 1)}
           onChange={(e) => {
-            const t = parseFloat(e.target.value);
+            const cap = durationSec || duration || 1;
+            const t = Math.min(parseFloat(e.target.value), cap);
             if (audioRef.current) audioRef.current.currentTime = t;
             setCurrentTime(t);
           }}
           className="w-full h-1 accent-primary cursor-pointer"
         />
         <div className="flex items-center justify-between text-[10px] text-muted-foreground/60 tabular-nums">
-          <span>{formatTime(currentTime)}</span>
-          <span>{formatTime(duration)}</span>
+          <span>{formatTime(Math.min(currentTime, durationSec || duration))}</span>
+          <span>{formatTime(durationSec || duration)}</span>
         </div>
       </div>
 

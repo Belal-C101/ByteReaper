@@ -37,7 +37,7 @@ export interface ChatMessage {
   id: string;
   senderId: string;
   createdAt: Timestamp;
-  type: "text" | "image" | "file" | "voice" | "ai";
+  type: "text" | "image" | "file" | "voice" | "ai" | "system";
   ciphertext: string; // base64 AES-GCM encrypted
   iv: string; // base64
   attachment?: {

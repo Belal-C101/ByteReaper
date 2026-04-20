@@ -35,7 +35,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
     );
   }
 
-  const validTypes = ["text", "image", "file", "voice", "ai"];
+  const validTypes = ["text", "image", "file", "voice", "ai", "system"];
   if (!validTypes.includes(body.type)) {
     return NextResponse.json({ error: "Invalid message type" }, { status: 400 });
   }
@@ -80,7 +80,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
       lastMessagePreview: body.type === "text" ? "[encrypted]" : `[${body.type}]`,
     };
 
-    if (peerUid) {
+    if (peerUid && body.type !== "system") {
       updateData[`unread.${peerUid}`] = FieldValue.increment(1);
     }
 

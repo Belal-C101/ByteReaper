@@ -1,6 +1,7 @@
 "use client";
 
-import { Download, ExternalLink, FileText } from "lucide-react";
+import { Download, ExternalLink, FileText, Loader2 } from "lucide-react";
+import { useState } from "react";
 
 export interface AttachmentData {
   url: string;
@@ -82,6 +83,24 @@ function proxyUrl(url: string, name?: string, disposition: "inline" | "attachmen
   return `/api/file-proxy?${params.toString()}`;
 }
 
+/**
+ * Fetch via proxy as a blob and trigger a real download.
+ * Needed because the `download` attribute is ignored on cross-origin URLs.
+ */
+async function blobDownload(proxyHref: string, fileName: string) {
+  const res = await fetch(proxyHref);
+  if (!res.ok) throw new Error(`Download failed (${res.status})`);
+  const blob = await res.blob();
+  const blobUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = blobUrl;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+}
+
 export function Attachment({
   attachment,
   compact = false,
@@ -90,10 +109,25 @@ export function Attachment({
   compact?: boolean;
 }) {
   const name = attachment.originalName || "file";
+  const [downloading, setDownloading] = useState(false);
   // All media/open links go through the proxy so the server can sign URLs
   // when the Cloudinary account requires authenticated delivery.
   const displayUrl = proxyUrl(attachment.url, name, "inline");
   const downloadHref = proxyUrl(attachment.url, name, "attachment");
+
+  const handleDownload = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      await blobDownload(downloadHref, name);
+    } catch {
+      // Fallback: open in new tab
+      window.open(displayUrl, "_blank", "noopener");
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   if (isImage(attachment)) {
     return (
@@ -169,9 +203,10 @@ export function Attachment({
         href={downloadHref}
         download={name}
         title="Download"
+        onClick={handleDownload}
         className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
       >
-        <Download className="h-3.5 w-3.5" />
+        {downloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
       </a>
     </div>
   );

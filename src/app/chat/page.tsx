@@ -843,6 +843,7 @@ export default function PrivateChatPage() {
   const activeCallChannelRef = useRef<string | null>(null);
   const acceptedIncomingCallIdRef = useRef<string | null>(null);
   const callAcceptedAtRef = useRef<number | null>(null);
+  const summarySentRef = useRef<Set<string>>(new Set());
 
   const activeConversation = useMemo(
     () => conversations.find((c) => c.id === activeConvId) ?? null,
@@ -1381,12 +1382,44 @@ export default function PrivateChatPage() {
     return `Voice call · ${mins}:${secs.toString().padStart(2, "0")}`;
   }, []);
 
+  const computeCallDurationSec = useCallback(() => {
+    const acceptedAtMs = callAcceptedAtRef.current ?? callStartTime;
+    if (!acceptedAtMs) return null;
+    return Math.max(1, Math.round((Date.now() - acceptedAtMs) / 1000));
+  }, [callStartTime]);
+
+  const sendCallSummaryOnce = useCallback(async (
+    conversationId: string,
+    channelName: string,
+    outcome: "duration" | "declined" | "missed",
+    durationSec?: number | null
+  ) => {
+    if (!conversationId || !channelName) return;
+    if (summarySentRef.current.has(channelName)) {
+      privateDebugLog("sendCallSummaryOnce:skipped", { channelName, outcome });
+      return;
+    }
+
+    summarySentRef.current.add(channelName);
+
+    let summaryText = "Voice call · Missed";
+    if (outcome === "declined") {
+      summaryText = "Voice call · Declined";
+    } else if (outcome === "duration") {
+      const measuredDuration = durationSec ?? computeCallDurationSec() ?? 1;
+      summaryText = formatVoiceCallDurationSummary(Math.max(1, Math.round(measuredDuration)));
+    }
+
+    await sendCallSummary(conversationId, summaryText);
+  }, [computeCallDurationSec, formatVoiceCallDurationSummary, sendCallSummary]);
+
   // ── Answer / Decline incoming call ──────────────────────
 
   const handleAnswerCall = useCallback(async () => {
     if (!incomingCall) return;
     const { callDocId, channelName, conversationId, peerName } = incomingCall;
     setIncomingCall(null);
+    summarySentRef.current.delete(channelName);
 
     try {
       await updateDoc(doc(db, "calls", callDocId), {
@@ -1406,19 +1439,19 @@ export default function PrivateChatPage() {
 
   const handleDeclineCall = useCallback(async () => {
     if (!incomingCall) return;
-    const { callDocId, conversationId } = incomingCall;
+    const { callDocId, channelName, conversationId } = incomingCall;
     setIncomingCall(null);
 
     try {
+      await sendCallSummaryOnce(conversationId, channelName, "declined");
       await updateDoc(doc(db, "calls", callDocId), {
         status: "rejected",
         endedAt: serverTimestamp(),
       });
-      await sendCallSummary(conversationId, "Voice call · Declined");
     } catch (err) {
       console.error("[ByteReaper] handleDeclineCall:error", err);
     }
-  }, [incomingCall, sendCallSummary]);
+  }, [incomingCall, sendCallSummaryOnce]);
 
   // ── Unlock handler ───────────────────────────────────────
 
@@ -1782,6 +1815,7 @@ export default function PrivateChatPage() {
       setActionError(null);
       const channelName = `br_${activeConvId}`;
       const convId = activeConvId;
+      summarySentRef.current.delete(channelName);
 
       // Create call document in Firestore
       await setDoc(doc(db, "calls", channelName), {
@@ -1806,8 +1840,8 @@ export default function PrivateChatPage() {
               status: "missed",
               endedAt: serverTimestamp(),
             });
+            await sendCallSummaryOnce(convId, channelName, "missed");
             await cleanupActiveCall("caller-timeout", false);
-            await sendCallSummary(convId, "Voice call · Missed");
           }
         } catch (e) {
           console.error("[ByteReaper] callerTimeout:error", e);
@@ -1821,9 +1855,11 @@ export default function PrivateChatPage() {
         if (!data) return;
         if (data.status === "rejected") {
           cleanupCallerListeners();
+          await sendCallSummaryOnce(convId, channelName, "declined");
           await cleanupActiveCall("callee-rejected", false);
         } else if (data.status === "missed") {
           cleanupCallerListeners();
+          await sendCallSummaryOnce(convId, channelName, "missed");
           await cleanupActiveCall("callee-missed", false);
         } else if (data.status === "accepted") {
           // Clear timeout — call is active now
@@ -1838,11 +1874,8 @@ export default function PrivateChatPage() {
         } else if (data.status === "ended" && activeCallChannelRef.current === channelName) {
           // Compute duration from local accept time to avoid server timestamp races.
           cleanupCallerListeners();
-          const acceptedAtMs = callAcceptedAtRef.current ?? callStartTime;
-          const durationSec = acceptedAtMs
-            ? Math.max(1, Math.round((Date.now() - acceptedAtMs) / 1000))
-            : 1;
-          await sendCallSummary(convId, formatVoiceCallDurationSummary(durationSec));
+          const durationSec = computeCallDurationSec();
+          await sendCallSummaryOnce(convId, channelName, "duration", durationSec);
           await cleanupActiveCall("call-ended-normally", false);
         }
       });
@@ -1857,9 +1890,38 @@ export default function PrivateChatPage() {
   };
 
   const handleEndCall = async () => {
-    privateDebugLog("handleEndCall:start", { channelName: activeCallChannelRef.current });
+    const channelName = activeCallChannelRef.current;
+    privateDebugLog("handleEndCall:start", { channelName });
+    if (!channelName) return;
+
+    try {
+      const callSnap = await getDoc(doc(db, "calls", channelName));
+      const callData = callSnap.exists()
+        ? callSnap.data() as { conversationId?: string; status?: string }
+        : null;
+      const conversationId = callData?.conversationId || activeConvId;
+      if (conversationId) {
+        const durationSec = computeCallDurationSec();
+        await sendCallSummaryOnce(
+          conversationId,
+          channelName,
+          durationSec ? "duration" : "declined",
+          durationSec
+        );
+      }
+    } catch (readErr) {
+      console.error("[ByteReaper] handleEndCall:read-call-error", readErr);
+    }
+
+    await updateDoc(doc(db, "calls", channelName), {
+      status: "ended",
+      endedAt: serverTimestamp(),
+    }).catch((updateErr) => {
+      console.error("[ByteReaper] handleEndCall:update-ended-error", updateErr);
+    });
+
     cleanupCallerListeners();
-    await cleanupActiveCall("manual-end-call", true);
+    await cleanupActiveCall("manual-end-call", false);
     privateDebugLog("handleEndCall:end");
   };
 
@@ -1930,6 +1992,13 @@ export default function PrivateChatPage() {
             activeCallChannelRef.current &&
             activeCallChannelRef.current === callData.channelName
           ) {
+            const durationSec = computeCallDurationSec();
+            await sendCallSummaryOnce(
+              callData.conversationId,
+              callData.channelName,
+              "duration",
+              durationSec
+            );
             cleanupCallerListeners();
             await cleanupActiveCall("remote-ended-call", false);
           }
@@ -1944,7 +2013,7 @@ export default function PrivateChatPage() {
       privateDebugLog("incomingCallEffect:cleanup", { uid: user.uid });
       unsubscribe();
     };
-  }, [cleanupActiveCall, joinVoiceChannel, peerProfiles, user]);
+  }, [cleanupActiveCall, computeCallDurationSec, joinVoiceChannel, peerProfiles, sendCallSummaryOnce, user]);
 
   // ── Peer info helper ─────────────────────────────────────
 

@@ -23,6 +23,7 @@ import { signOut } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { ProfileModal } from "./profile-modal";
+import { ProfileDrawer } from "@/components/messenger/ProfileDrawer";
 import { AdminLink } from "@/components/admin/AdminLink";
 
 export function Navbar() {
@@ -32,6 +33,7 @@ export function Navbar() {
   const [mounted, setMounted] = useState(false);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [messengerDrawerOpen, setMessengerDrawerOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
 
@@ -160,6 +162,17 @@ export function Navbar() {
                             >
                               <UserIcon className="h-3.5 w-3.5 text-muted-foreground" />
                               Profile
+                            </button>
+
+                            <button
+                              onClick={() => {
+                                setProfileDropdownOpen(false);
+                                setMessengerDrawerOpen(true);
+                              }}
+                              className="w-full flex items-center gap-2.5 px-3 py-2 text-sm hover:bg-accent/60 transition-colors text-left"
+                            >
+                              <MessageCircle className="h-3.5 w-3.5 text-muted-foreground" />
+                              Messenger Profile
                             </button>
 
                             <div className="mx-2 my-1 border-t border-border/30" />
@@ -366,6 +379,12 @@ export function Navbar() {
       <ProfileModal
         isOpen={profileModalOpen}
         onClose={() => setProfileModalOpen(false)}
+      />
+
+      {/* Messenger Profile Drawer */}
+      <ProfileDrawer
+        isOpen={messengerDrawerOpen}
+        onClose={() => setMessengerDrawerOpen(false)}
       />
     </>
   );

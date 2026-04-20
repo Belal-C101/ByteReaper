@@ -842,6 +842,7 @@ export default function PrivateChatPage() {
   const remoteAudioTrackRef = useRef<IRemoteAudioTrack | null>(null);
   const activeCallChannelRef = useRef<string | null>(null);
   const acceptedIncomingCallIdRef = useRef<string | null>(null);
+  const callAcceptedAtRef = useRef<number | null>(null);
 
   const activeConversation = useMemo(
     () => conversations.find((c) => c.id === activeConvId) ?? null,
@@ -1238,6 +1239,7 @@ export default function PrivateChatPage() {
 
     activeCallChannelRef.current = null;
     acceptedIncomingCallIdRef.current = null;
+    callAcceptedAtRef.current = null;
     setCallStatus(null);
     setCallStartTime(null);
     setIsMuted(false);
@@ -1326,6 +1328,11 @@ export default function PrivateChatPage() {
 
     client.on("connection-state-change", (curState, prevState, reason) => {
       privateDebugLog("call:connection-state", { curState, prevState, reason });
+      if (curState === "CONNECTED" && callAcceptedAtRef.current === null) {
+        const connectedAtMs = Date.now();
+        callAcceptedAtRef.current = connectedAtMs;
+        setCallStartTime((prev) => prev ?? connectedAtMs);
+      }
     });
 
     await client.join(data.appId, channelName, data.token, data.uid);
@@ -1368,6 +1375,12 @@ export default function PrivateChatPage() {
     }
   }, [resolveConversationKey]);
 
+  const formatVoiceCallDurationSummary = useCallback((durationSec: number) => {
+    const mins = Math.floor(durationSec / 60);
+    const secs = durationSec % 60;
+    return `Voice call · ${mins}:${secs.toString().padStart(2, "0")}`;
+  }, []);
+
   // ── Answer / Decline incoming call ──────────────────────
 
   const handleAnswerCall = useCallback(async () => {
@@ -1380,8 +1393,10 @@ export default function PrivateChatPage() {
         status: "accepted",
         acceptedAt: serverTimestamp(),
       });
+      const acceptedAtMs = Date.now();
+      callAcceptedAtRef.current = acceptedAtMs;
       setCallStatus({ peerName, status: "connected" });
-      setCallStartTime(Date.now());
+      setCallStartTime(acceptedAtMs);
       await joinVoiceChannel(channelName, conversationId, peerName);
     } catch (err) {
       console.error("[ByteReaper] handleAnswerCall:error", err);
@@ -1816,24 +1831,18 @@ export default function PrivateChatPage() {
             clearTimeout(callerTimeoutRef.current);
             callerTimeoutRef.current = null;
           }
+          const acceptedAtMs = Date.now();
+          callAcceptedAtRef.current = acceptedAtMs;
           setCallStatus({ peerName, status: "connected" });
-          setCallStartTime(Date.now());
+          setCallStartTime(acceptedAtMs);
         } else if (data.status === "ended" && activeCallChannelRef.current === channelName) {
-          // Compute duration for summary
+          // Compute duration from local accept time to avoid server timestamp races.
           cleanupCallerListeners();
-          const acceptedAt = data.acceptedAt?.toDate?.();
-          const endedAt = data.endedAt?.toDate?.();
-          if (acceptedAt && endedAt) {
-            const durationSec = Math.round((endedAt.getTime() - acceptedAt.getTime()) / 1000);
-            const mins = Math.floor(durationSec / 60);
-            const secs = durationSec % 60;
-            await sendCallSummary(
-              convId,
-              `Voice call · ${mins}:${secs.toString().padStart(2, "0")}`
-            );
-          } else {
-            await sendCallSummary(convId, "Voice call · Ended");
-          }
+          const acceptedAtMs = callAcceptedAtRef.current ?? callStartTime;
+          const durationSec = acceptedAtMs
+            ? Math.max(1, Math.round((Date.now() - acceptedAtMs) / 1000))
+            : 1;
+          await sendCallSummary(convId, formatVoiceCallDurationSummary(durationSec));
           await cleanupActiveCall("call-ended-normally", false);
         }
       });

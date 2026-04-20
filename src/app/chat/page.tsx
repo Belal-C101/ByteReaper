@@ -71,6 +71,14 @@ function privateDebugLog(message: string, payload?: unknown) {
   console.log("[ByteReaper]", message, payload);
 }
 
+/** Route Cloudinary URLs through the file-proxy so the server can sign them */
+function proxyCloudinaryUrl(url: string, name?: string): string {
+  if (!url.includes("res.cloudinary.com")) return url;
+  const params = new URLSearchParams({ url, disposition: "inline" });
+  if (name) params.set("name", name);
+  return `/api/file-proxy?${params.toString()}`;
+}
+
 // ─── Username setup modal ──────────────────────────────────
 
 function UsernameSetupModal({
@@ -491,7 +499,7 @@ function MessageBubble({
           <div className="mb-1.5">
             {message.type === "voice" ? (
               <VoiceBubble
-                url={message.attachment.url}
+                url={proxyCloudinaryUrl(message.attachment.url, message.attachment.originalName)}
                 durationSec={(message.attachment as { durationSec?: number }).durationSec}
               />
             ) : (

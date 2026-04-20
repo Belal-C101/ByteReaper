@@ -1959,12 +1959,13 @@ export default function PrivateChatPage() {
             callerId: string;
             status: "ringing" | "accepted" | "rejected" | "ended" | "missed";
           };
+          const isActiveCallChannel = callData.channelName === activeCallChannelRef.current;
 
           // Show incoming call modal instead of auto-accepting
           if (
             callData.status === "ringing" &&
             acceptedIncomingCallIdRef.current !== callDoc.id &&
-            activeCallChannelRef.current !== callData.channelName
+            !isActiveCallChannel
           ) {
             acceptedIncomingCallIdRef.current = callDoc.id;
             const peerName =
@@ -1993,7 +1994,7 @@ export default function PrivateChatPage() {
           if (
             callData.status === "ended" &&
             activeCallChannelRef.current &&
-            activeCallChannelRef.current === callData.channelName
+            isActiveCallChannel
           ) {
             const durationSec = computeCallDurationSec();
             await sendCallSummaryOnce(
@@ -2057,6 +2058,7 @@ export default function PrivateChatPage() {
   }
 
   // ── Render ───────────────────────────────────────────────
+  privateDebugLog("render:overlay", { hasStatus: Boolean(callStatus), status: callStatus?.status });
 
   return (
     <div className="flex h-[calc(100vh-3.5rem)] overflow-hidden">

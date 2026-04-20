@@ -1,9 +1,8 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Mic, Square, X, Loader2 } from "lucide-react";
+import { Mic, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { uploadToCloudinary } from "@/lib/cloudinary-upload";
 
 interface VoiceRecorderProps {
   onRecorded: (file: File, durationSec: number) => void;
@@ -19,8 +18,9 @@ function formatTime(sec: number): string {
 export function VoiceRecorder({ onRecorded, disabled }: VoiceRecorderProps) {
   const [recording, setRecording] = useState(false);
   const [elapsedSec, setElapsedSec] = useState(0);
-  const [error, setError] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [level, setLevel] = useState(0);
+  const [slideCancelArmed, setSlideCancelArmed] = useState(false);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -28,32 +28,55 @@ export function VoiceRecorder({ onRecorded, disabled }: VoiceRecorderProps) {
   const startTimeRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
   const animFrameRef = useRef<number | null>(null);
+  const activePointerIdRef = useRef<number | null>(null);
+  const stopOnStartRef = useRef<"stop" | "cancel" | null>(null);
+  const shouldCancelOnReleaseRef = useRef(false);
+
+  const showToast = useCallback((message: string) => {
+    setToastMessage(message);
+  }, []);
+
+  useEffect(() => {
+    if (!toastMessage) return;
+    const timeout = setTimeout(() => setToastMessage(null), 3200);
+    return () => clearTimeout(timeout);
+  }, [toastMessage]);
 
   const cleanup = useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current);
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     streamRef.current?.getTracks().forEach((t) => t.stop());
+    if (audioContextRef.current && audioContextRef.current.state !== "closed") {
+      audioContextRef.current.close().catch(() => {});
+    }
     recorderRef.current = null;
     streamRef.current = null;
     analyserRef.current = null;
+    audioContextRef.current = null;
     chunksRef.current = [];
+    activePointerIdRef.current = null;
+    stopOnStartRef.current = null;
+    shouldCancelOnReleaseRef.current = false;
     setRecording(false);
     setElapsedSec(0);
     setLevel(0);
+    setSlideCancelArmed(false);
   }, []);
 
   // Cleanup on unmount
   useEffect(() => cleanup, [cleanup]);
 
   const startRecording = async () => {
-    setError(null);
+    setSlideCancelArmed(false);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
       // Audio level meter
       const audioCtx = new AudioContext();
+      audioContextRef.current = audioCtx;
       const source = audioCtx.createMediaStreamSource(stream);
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 256;
@@ -101,14 +124,26 @@ export function VoiceRecorder({ onRecorded, disabled }: VoiceRecorderProps) {
       timerRef.current = setInterval(() => {
         setElapsedSec((Date.now() - startTimeRef.current) / 1000);
       }, 200);
+
+      if (stopOnStartRef.current === "cancel") {
+        stopOnStartRef.current = null;
+        cancelRecording();
+      } else if (stopOnStartRef.current === "stop") {
+        stopOnStartRef.current = null;
+        stopRecording();
+      }
     } catch (err) {
-      const e = err as Error;
-      if (e.name === "NotAllowedError") {
-        setError("Microphone access denied");
-      } else if (e.name === "NotFoundError") {
-        setError("No microphone found");
+      const domErr = err instanceof DOMException ? err : null;
+      const errName = domErr?.name || (err instanceof Error ? err.name : "");
+      if (errName === "NotAllowedError") {
+        showToast("Microphone permission denied. Enable mic access and try again.");
+      } else if (errName === "NotFoundError") {
+        showToast("No microphone found on this device.");
+      } else if (errName === "SecurityError") {
+        showToast("Microphone requires a secure HTTPS context.");
       } else {
-        setError(e.message || "Failed to start recording");
+        const message = err instanceof Error ? err.message : "Failed to start recording.";
+        showToast(message);
       }
       cleanup();
     }
@@ -142,62 +177,124 @@ export function VoiceRecorder({ onRecorded, disabled }: VoiceRecorderProps) {
     return () => window.removeEventListener("keydown", handleKey);
   });
 
-  if (error) {
-    return (
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-destructive">{error}</span>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setError(null)}>
-          <X className="h-3 w-3" />
-        </Button>
-      </div>
-    );
-  }
+  const beginHoldRecording = async (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (disabled || recording || activePointerIdRef.current !== null) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    activePointerIdRef.current = e.pointerId;
+    shouldCancelOnReleaseRef.current = false;
+    await startRecording();
+  };
 
-  if (recording) {
-    return (
-      <div className="flex items-center gap-2 px-2 py-1 rounded-full bg-destructive/10 border border-destructive/20">
-        {/* Level indicator */}
-        <div
-          className="h-2 w-2 rounded-full bg-destructive animate-pulse"
-          style={{ transform: `scale(${0.5 + level * 1.5})` }}
-        />
-        <span className="text-xs font-mono text-destructive tabular-nums">
-          {formatTime(elapsedSec)}
-        </span>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 text-muted-foreground hover:text-foreground"
-          onClick={cancelRecording}
-          title="Cancel (Esc)"
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 text-destructive hover:text-destructive"
-          onClick={stopRecording}
-          title="Stop recording"
-        >
-          <Square className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-    );
-  }
+  const endHoldRecording = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (activePointerIdRef.current !== e.pointerId) return;
+    e.preventDefault();
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // Ignore release failures for stale pointers.
+    }
+    activePointerIdRef.current = null;
+
+    if (!recording) {
+      stopOnStartRef.current = shouldCancelOnReleaseRef.current ? "cancel" : "stop";
+      return;
+    }
+
+    if (shouldCancelOnReleaseRef.current) {
+      cancelRecording();
+    } else {
+      stopRecording();
+    }
+  };
+
+  const cancelPointerRecording = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (activePointerIdRef.current !== e.pointerId) return;
+    e.preventDefault();
+    shouldCancelOnReleaseRef.current = true;
+    setSlideCancelArmed(true);
+
+    if (!recording) {
+      stopOnStartRef.current = "cancel";
+      return;
+    }
+
+    cancelRecording();
+  };
+
+  const trackPointerPosition = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (activePointerIdRef.current !== e.pointerId || !recording) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const outside =
+      e.clientX < rect.left ||
+      e.clientX > rect.right ||
+      e.clientY < rect.top ||
+      e.clientY > rect.bottom;
+    shouldCancelOnReleaseRef.current = outside;
+    setSlideCancelArmed(outside);
+  };
 
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="h-8 w-8 text-muted-foreground hover:text-foreground"
-      onClick={startRecording}
-      disabled={disabled}
-      title="Record voice message"
-      aria-label="Record voice message"
-    >
-      <Mic className="h-4 w-4" />
-    </Button>
+    <div className="relative flex items-center gap-2">
+      {recording && (
+        <div className="flex items-center gap-2 px-2 py-1 rounded-full bg-destructive/10 border border-destructive/20">
+          <div
+            className="h-2 w-2 rounded-full bg-destructive animate-pulse"
+            style={{ transform: `scale(${0.5 + level * 1.5})` }}
+          />
+          <span className="text-xs font-mono text-destructive tabular-nums">
+            {formatTime(elapsedSec)}
+          </span>
+          {slideCancelArmed && (
+            <span className="text-[10px] text-destructive/80">Release to cancel</span>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 text-muted-foreground hover:text-foreground"
+            onClick={cancelRecording}
+            title="Cancel (Esc)"
+          >
+            <X className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 text-destructive hover:text-destructive"
+            onClick={stopRecording}
+            title="Stop recording"
+          >
+            <Square className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      )}
+
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-8 w-8 text-muted-foreground hover:text-foreground"
+        onPointerDown={beginHoldRecording}
+        onPointerUp={endHoldRecording}
+        onPointerCancel={cancelPointerRecording}
+        onPointerLeave={cancelPointerRecording}
+        onPointerMove={trackPointerPosition}
+        disabled={disabled}
+        title="Hold to record voice message"
+        aria-label="Hold to record voice message"
+        style={{ touchAction: "none" }}
+      >
+        <Mic className="h-4 w-4" />
+      </Button>
+
+      {toastMessage && (
+        <div
+          role="alert"
+          className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[80] rounded-lg bg-destructive text-destructive-foreground px-3 py-2 text-xs shadow-lg"
+        >
+          {toastMessage}
+        </div>
+      )}
+    </div>
   );
 }
 

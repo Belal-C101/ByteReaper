@@ -260,6 +260,7 @@ export function VoiceBubble({ url, durationSec }: VoiceBubbleProps) {
         src={url}
         preload="auto"
         playsInline
+        crossOrigin="anonymous"
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
         onEnded={() => { setPlaying(false); setCurrentTime(0); }}

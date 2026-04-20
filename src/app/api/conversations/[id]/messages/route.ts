@@ -59,6 +59,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
         bytes: body.attachment.bytes || 0,
         mime: body.attachment.mime || "",
         originalName: body.attachment.originalName || "",
+        durationSec: body.attachment.durationSec || 0,
       };
     }
 

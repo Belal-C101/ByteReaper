@@ -527,10 +527,20 @@ function MessageBubble({
         {message.attachment && (
           <div className="mb-1.5">
             {message.type === "voice" ? (
-              <VoiceBubble
-                url={proxyCloudinaryUrl(message.attachment.url, message.attachment.originalName)}
-                durationSec={(message.attachment as { durationSec?: number }).durationSec}
-              />
+              (() => {
+                let dur = (message.attachment as { durationSec?: number }).durationSec;
+                // Fallback: parse from decrypted text "[Voice message: Xs]" for old messages
+                if (!dur && decryptedText) {
+                  const m = decryptedText.match(/\[Voice message:\s*(\d+)s\]/i);
+                  if (m) dur = parseInt(m[1], 10);
+                }
+                return (
+                  <VoiceBubble
+                    url={proxyCloudinaryUrl(message.attachment.url, message.attachment.originalName)}
+                    durationSec={dur}
+                  />
+                );
+              })()
             ) : (
               <Attachment
                 attachment={{
@@ -546,14 +556,16 @@ function MessageBubble({
           </div>
         )}
 
-        <p className="text-sm whitespace-pre-wrap break-words">
-          {decryptedText ?? (
-            <span className="italic text-muted-foreground/60">
-              <Lock className="inline h-3 w-3 mr-1" />
-              Encrypted
-            </span>
-          )}
-        </p>
+        {message.type !== "voice" && (
+          <p className="text-sm whitespace-pre-wrap break-words">
+            {decryptedText ?? (
+              <span className="italic text-muted-foreground/60">
+                <Lock className="inline h-3 w-3 mr-1" />
+                Encrypted
+              </span>
+            )}
+          </p>
+        )}
 
         <p
           className={`text-[10px] mt-0.5 flex items-center gap-1 ${
@@ -571,9 +583,9 @@ function MessageBubble({
             ) : isFailed ? (
               <span className="text-destructive font-medium">!</span>
             ) : isRead ? (
-              <CheckCheck className="h-3 w-3 text-blue-400" />
+              <CheckCheck className="h-3 w-3 text-green-500" />
             ) : (
-              <CheckCheck className="h-3 w-3 opacity-60" />
+              <CheckCheck className="h-3 w-3 text-muted-foreground" />
             )
           )}
         </p>
@@ -587,6 +599,7 @@ function MessageBubble({
 function VoiceCallOverlay({
   peerName,
   status,
+  startTime,
   onEnd,
   isMuted,
   onToggleMute,
@@ -595,12 +608,28 @@ function VoiceCallOverlay({
 }: {
   peerName: string;
   status: "ringing" | "connected";
+  startTime: number | null;
   onEnd: () => void;
   isMuted: boolean;
   onToggleMute: () => void;
   isSpeakerOn: boolean;
   onToggleSpeaker: () => void;
 }) {
+  const [elapsed, setElapsed] = useState(0);
+
+  // Call duration timer
+  useEffect(() => {
+    if (status !== "connected" || !startTime) {
+      setElapsed(0);
+      return;
+    }
+    setElapsed(Math.floor((Date.now() - startTime) / 1000));
+    const timer = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [status, startTime]);
+
   // Keyboard shortcuts
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -631,7 +660,7 @@ function VoiceCallOverlay({
       <div>
         <p className="text-sm font-medium">{peerName}</p>
         <p className="text-xs text-muted-foreground">
-          {status === "ringing" ? "Ringing..." : "Connected"}
+          {status === "ringing" ? "Ringing..." : `Connected · ${Math.floor(elapsed / 60)}:${(elapsed % 60).toString().padStart(2, "0")}`}
           {status === "connected" && isMuted && " · Muted"}
         </p>
       </div>
@@ -786,10 +815,12 @@ export default function PrivateChatPage() {
 
   // UI
   const [inputText, setInputText] = useState("");
+  const [showMentionPopup, setShowMentionPopup] = useState(false);
   const [sending, setSending] = useState(false);
   const [showNewConv, setShowNewConv] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
   const [callStatus, setCallStatus] = useState<{ peerName: string; status: "ringing" | "connected" } | null>(null);
+  const [callStartTime, setCallStartTime] = useState<number | null>(null);
   const [incomingCall, setIncomingCall] = useState<{
     callDocId: string;
     channelName: string;
@@ -917,27 +948,36 @@ export default function PrivateChatPage() {
       collection(db, "conversations", activeConvId, "messages"),
       orderBy("createdAt", "asc")
     );
+
+    // Helper to mark unread messages from peer as read
+    const markAsRead = (msgs: ChatMessage[]) => {
+      if (document.visibilityState !== "visible") return;
+      const unreadFromPeer = msgs.filter(
+        (m) => m.senderId !== user.uid && (!m.readBy || !m.readBy.includes(user.uid))
+      );
+      if (unreadFromPeer.length > 0) {
+        const batch = writeBatch(db);
+        unreadFromPeer.forEach((m) => {
+          batch.update(doc(db, "conversations", activeConvId, "messages", m.id), {
+            readBy: arrayUnion(user.uid),
+          });
+        });
+        batch.commit().catch((err) => {
+          console.error("[ByteReaper] readBy:batch:error", err);
+        });
+      }
+    };
+
+    let latestMsgs: ChatMessage[] = [];
+
     const unsub = onSnapshot(
       q,
       (snap) => {
         const msgs = snap.docs.map((d) => ({ id: d.id, ...d.data() } as ChatMessage));
         setMessages(msgs);
+        latestMsgs = msgs;
 
-        // Mark peer messages as read (write readBy for this user)
-        const unreadFromPeer = msgs.filter(
-          (m) => m.senderId !== user.uid && (!m.readBy || !m.readBy.includes(user.uid))
-        );
-        if (unreadFromPeer.length > 0) {
-          const batch = writeBatch(db);
-          unreadFromPeer.forEach((m) => {
-            batch.update(doc(db, "conversations", activeConvId, "messages", m.id), {
-              readBy: arrayUnion(user.uid),
-            });
-          });
-          batch.commit().catch((err) => {
-            console.error("[ByteReaper] readBy:batch:error", err);
-          });
-        }
+        markAsRead(msgs);
 
         // Scroll to bottom
         setTimeout(() => {
@@ -949,6 +989,14 @@ export default function PrivateChatPage() {
       }
     );
 
+    // Re-mark as read when page becomes visible (mobile background recovery)
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible" && latestMsgs.length > 0) {
+        markAsRead(latestMsgs);
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+
     // Reset unread
     updateDoc(doc(db, "conversations", activeConvId), {
       [`unread.${user.uid}`]: 0,
@@ -956,7 +1004,10 @@ export default function PrivateChatPage() {
       console.error("[ByteReaper] resetUnread:error", err);
     });
 
-    return unsub;
+    return () => {
+      unsub();
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [activeConvId, user]);
 
   // ── Decrypt messages ─────────────────────────────────────
@@ -1188,6 +1239,7 @@ export default function PrivateChatPage() {
     activeCallChannelRef.current = null;
     acceptedIncomingCallIdRef.current = null;
     setCallStatus(null);
+    setCallStartTime(null);
     setIsMuted(false);
     setIsSpeakerOn(true);
     privateDebugLog("call:cleanup:end", { reason });
@@ -1283,18 +1335,17 @@ export default function PrivateChatPage() {
     callClientRef.current = client;
     localAudioTrackRef.current = localAudioTrack;
     activeCallChannelRef.current = channelName;
-    setCallStatus({ peerName, status: "connected" });
     privateDebugLog("call:join:end", { channelName, peerName });
   }, [cleanupActiveCall, user]);
 
   // ── Send a system message for call events ─────────────────
 
   const sendCallSummary = useCallback(async (conversationId: string, summaryText: string) => {
-    try {
+    const attempt = async () => {
       const convKey = await resolveConversationKey(conversationId);
       const { ciphertext, iv } = await encryptMessage(summaryText, convKey);
       const token = await auth.currentUser?.getIdToken();
-      await fetch(`/api/conversations/${conversationId}/messages`, {
+      const res = await fetch(`/api/conversations/${conversationId}/messages`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1302,8 +1353,18 @@ export default function PrivateChatPage() {
         },
         body: JSON.stringify({ type: "system", ciphertext, iv }),
       });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    };
+    try {
+      await attempt();
     } catch (err) {
-      console.error("[ByteReaper] sendCallSummary:error", err);
+      console.warn("[ByteReaper] sendCallSummary: first attempt failed, retrying...", err);
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        await attempt();
+      } catch (retryErr) {
+        console.error("[ByteReaper] sendCallSummary: retry failed", retryErr);
+      }
     }
   }, [resolveConversationKey]);
 
@@ -1319,7 +1380,8 @@ export default function PrivateChatPage() {
         status: "accepted",
         acceptedAt: serverTimestamp(),
       });
-      setCallStatus({ peerName, status: "ringing" });
+      setCallStatus({ peerName, status: "connected" });
+      setCallStartTime(Date.now());
       await joinVoiceChannel(channelName, conversationId, peerName);
     } catch (err) {
       console.error("[ByteReaper] handleAnswerCall:error", err);
@@ -1745,7 +1807,6 @@ export default function PrivateChatPage() {
         if (data.status === "rejected") {
           cleanupCallerListeners();
           await cleanupActiveCall("callee-rejected", false);
-          await sendCallSummary(convId, "Voice call · Declined");
         } else if (data.status === "missed") {
           cleanupCallerListeners();
           await cleanupActiveCall("callee-missed", false);
@@ -1755,6 +1816,8 @@ export default function PrivateChatPage() {
             clearTimeout(callerTimeoutRef.current);
             callerTimeoutRef.current = null;
           }
+          setCallStatus({ peerName, status: "connected" });
+          setCallStartTime(Date.now());
         } else if (data.status === "ended" && activeCallChannelRef.current === channelName) {
           // Compute duration for summary
           cleanupCallerListeners();
@@ -1768,6 +1831,8 @@ export default function PrivateChatPage() {
               convId,
               `Voice call · ${mins}:${secs.toString().padStart(2, "0")}`
             );
+          } else {
+            await sendCallSummary(convId, "Voice call · Ended");
           }
           await cleanupActiveCall("call-ended-normally", false);
         }
@@ -1921,6 +1986,7 @@ export default function PrivateChatPage() {
           <VoiceCallOverlay
             peerName={callStatus.peerName}
             status={callStatus.status}
+            startTime={callStartTime}
             onEnd={handleEndCall}
             isMuted={isMuted}
             onToggleMute={toggleMute}
@@ -2201,18 +2267,62 @@ export default function PrivateChatPage() {
                   <Paperclip className="h-4 w-4" />
                 </Button>
 
-                <Input
-                  value={inputText}
-                  onChange={(e) => setInputText(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      handleSend();
-                    }
-                  }}
-                  placeholder="Type a message... (@ByteReaper for AI)"
-                  className="flex-1"
-                />
+                <div className="relative flex-1">
+                  <Input
+                    value={inputText}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setInputText(val);
+                      // Show popup when "@" is typed at end or after a space
+                      const showPopup = /(^|[\s])@$/i.test(val) || val === "@";
+                      setShowMentionPopup(showPopup);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape" && showMentionPopup) {
+                        e.preventDefault();
+                        setShowMentionPopup(false);
+                        return;
+                      }
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        if (showMentionPopup) {
+                          e.preventDefault();
+                          // Select the mention on Enter
+                          setInputText((prev) => prev.replace(/@$/, "@ByteReaper "));
+                          setShowMentionPopup(false);
+                          return;
+                        }
+                        e.preventDefault();
+                        handleSend();
+                      }
+                    }}
+                    placeholder="Type a message..."
+                    className="flex-1"
+                  />
+                  <AnimatePresence>
+                    {showMentionPopup && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 4 }}
+                        className="absolute bottom-full left-0 mb-1 bg-card border border-border rounded-lg shadow-lg overflow-hidden z-50"
+                      >
+                        <button
+                          type="button"
+                          className="flex items-center gap-2 px-3 py-2 w-full hover:bg-accent text-left text-sm"
+                          onMouseDown={(e) => {
+                            e.preventDefault(); // prevent input blur
+                            setInputText((prev) => prev.replace(/@$/, "@ByteReaper "));
+                            setShowMentionPopup(false);
+                          }}
+                        >
+                          <Bot className="h-4 w-4 text-primary" />
+                          <span className="font-medium">@ByteReaper</span>
+                          <span className="text-muted-foreground text-xs">AI Assistant</span>
+                        </button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
 
                 <VoiceRecorder
                   onRecorded={handleVoiceRecorded}
@@ -2242,9 +2352,6 @@ export default function PrivateChatPage() {
                   {actionError}
                 </p>
               )}
-              <p className="text-[10px] text-muted-foreground mt-1 ml-11">
-                Type <span className="font-medium">@ByteReaper</span> to ask AI
-              </p>
             </div>
           </>
         ) : (

@@ -207,5 +207,30 @@ service cloud.firestore {
                        (resource.data.callerId == request.auth.uid ||
                         resource.data.calleeId == request.auth.uid);
     }
+
+    // ─── Messenger Profiles (uid-keyed) ──────────────────────
+
+    match /messenger_profiles/{uid} {
+      allow read:   if isAuthenticated() && request.auth.uid == uid;
+      allow create: if isAuthenticated() && request.auth.uid == uid
+                    && request.resource.data.uid == uid
+                    && request.resource.data.username is string
+                    && request.resource.data.passwordHash is string
+                    && request.resource.data.passwordSalt is string;
+      allow update: if isAuthenticated() && request.auth.uid == uid
+                    && request.resource.data.uid == uid
+                    && request.resource.data.username == resource.data.username;
+      allow delete: if isAuthenticated() && request.auth.uid == uid;
+    }
+
+    // ─── Messenger Username Reservations ─────────────────────
+
+    match /messenger_usernames/{usernameLower} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated()
+                    && request.resource.data.uid == request.auth.uid;
+      allow delete: if isAuthenticated()
+                    && resource.data.uid == request.auth.uid;
+    }
   }
 }

@@ -30,9 +30,10 @@ import {
   MessageCircle,
   Loader2,
   Lock,
-  Image as ImageIcon,
-  File as FileIcon,
   Mic,
+  MicOff,
+  Volume2,
+  VolumeX,
   X,
   Bot,
   PhoneOff,
@@ -54,6 +55,8 @@ import {
   fromBase64,
 } from "@/lib/crypto/e2e";
 import { uploadFile } from "@/lib/uploads/client";
+import { Attachment } from "@/components/chat/Attachment";
+import { VoiceRecorder, VoiceBubble } from "@/components/messenger/VoiceRecorder";
 import type { Conversation, ChatMessage, UserProfile } from "@/types/private-chat";
 
 const DEBUG_PRIVATE_CHAT =
@@ -453,24 +456,6 @@ function NewConversationModal({
 
 // ─── Message bubble ────────────────────────────────────────
 
-function buildAttachmentProxyUrl(
-  sourceUrl: string,
-  fileName: string,
-  disposition: "inline" | "attachment" = "inline"
-): string {
-  const params = new URLSearchParams({
-    url: sourceUrl,
-    name: fileName || "attachment",
-    disposition,
-  });
-  return `/api/file-proxy?${params.toString()}`;
-}
-
-function isImageAttachment(attachment?: ChatMessage["attachment"]): boolean {
-  if (!attachment) return false;
-  return attachment.resourceType === "image" || attachment.mime.startsWith("image/");
-}
-
 function MessageBubble({
   message,
   isOwn,
@@ -504,28 +489,22 @@ function MessageBubble({
 
         {message.attachment && (
           <div className="mb-1.5">
-            {isImageAttachment(message.attachment) ? (
-              <img
-                src={message.attachment.url}
-                alt={message.attachment.originalName}
-                className="max-w-full rounded-lg max-h-[300px] object-contain"
+            {message.type === "voice" ? (
+              <VoiceBubble
+                url={message.attachment.url}
+                durationSec={(message.attachment as { durationSec?: number }).durationSec}
               />
             ) : (
-              <a
-                href={buildAttachmentProxyUrl(
-                  message.attachment.url,
-                  message.attachment.originalName || "attachment",
-                  "inline"
-                )}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-2 p-2 rounded-lg bg-background/30 hover:bg-background/50 transition-colors"
-              >
-                <FileIcon className="h-4 w-4 shrink-0" />
-                <span className="text-xs truncate">
-                  {message.attachment.originalName}
-                </span>
-              </a>
+              <Attachment
+                attachment={{
+                  url: message.attachment.url,
+                  publicId: message.attachment.publicId,
+                  resourceType: message.attachment.resourceType,
+                  bytes: message.attachment.bytes,
+                  mime: message.attachment.mime,
+                  originalName: message.attachment.originalName,
+                }}
+              />
             )}
           </div>
         )}
@@ -561,17 +540,42 @@ function VoiceCallOverlay({
   peerName,
   status,
   onEnd,
+  isMuted,
+  onToggleMute,
+  isSpeakerOn,
+  onToggleSpeaker,
 }: {
   peerName: string;
   status: "ringing" | "connected";
   onEnd: () => void;
+  isMuted: boolean;
+  onToggleMute: () => void;
+  isSpeakerOn: boolean;
+  onToggleSpeaker: () => void;
 }) {
+  // Keyboard shortcuts
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === "m" || e.key === "M") {
+        e.preventDefault();
+        onToggleMute();
+      }
+      if (e.key === "s" || e.key === "S") {
+        e.preventDefault();
+        onToggleSpeaker();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onToggleMute, onToggleSpeaker]);
+
   return (
     <motion.div
       initial={{ opacity: 0, y: -20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -20 }}
-      className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-card border border-border rounded-2xl shadow-xl p-4 flex items-center gap-4"
+      className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-card border border-border rounded-2xl shadow-xl p-4 flex items-center gap-3"
     >
       <div className="h-10 w-10 rounded-full bg-green-500/10 flex items-center justify-center">
         <Phone className="h-5 w-5 text-green-500" />
@@ -580,13 +584,44 @@ function VoiceCallOverlay({
         <p className="text-sm font-medium">{peerName}</p>
         <p className="text-xs text-muted-foreground">
           {status === "ringing" ? "Ringing..." : "Connected"}
+          {status === "connected" && isMuted && " · Muted"}
         </p>
       </div>
+
+      {/* Mic mute/unmute */}
+      <Button
+        variant={isMuted ? "secondary" : "ghost"}
+        size="icon"
+        onClick={onToggleMute}
+        className="h-9 w-9 rounded-full"
+        aria-label={isMuted ? "Unmute microphone (M)" : "Mute microphone (M)"}
+        aria-pressed={isMuted}
+        title={isMuted ? "Unmute microphone (M)" : "Mute microphone (M)"}
+      >
+        {isMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+      </Button>
+
+      {/* Speaker on/off */}
+      <Button
+        variant={!isSpeakerOn ? "secondary" : "ghost"}
+        size="icon"
+        onClick={onToggleSpeaker}
+        className="h-9 w-9 rounded-full"
+        aria-label={isSpeakerOn ? "Speaker off (S)" : "Speaker on (S)"}
+        aria-pressed={!isSpeakerOn}
+        title={isSpeakerOn ? "Speaker off (S)" : "Speaker on (S)"}
+      >
+        {isSpeakerOn ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+      </Button>
+
+      {/* End call */}
       <Button
         variant="destructive"
         size="icon"
         onClick={onEnd}
         className="h-9 w-9 rounded-full"
+        aria-label="End call"
+        title="End call"
       >
         <PhoneOff className="h-4 w-4" />
       </Button>
@@ -622,6 +657,8 @@ export default function PrivateChatPage() {
   const [showNewConv, setShowNewConv] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
   const [callStatus, setCallStatus] = useState<{ peerName: string; status: "ringing" | "connected" } | null>(null);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isSpeakerOn, setIsSpeakerOn] = useState(true);
   const [startChatError, setStartChatError] = useState<string | null>(null);
   const [creatingChat, setCreatingChat] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -994,8 +1031,31 @@ export default function PrivateChatPage() {
     activeCallChannelRef.current = null;
     acceptedIncomingCallIdRef.current = null;
     setCallStatus(null);
+    setIsMuted(false);
+    setIsSpeakerOn(true);
     privateDebugLog("call:cleanup:end", { reason });
   }, []);
+
+  const toggleMute = useCallback(() => {
+    const track = localAudioTrackRef.current;
+    if (track) {
+      track.setEnabled(isMuted); // was muted, now enable (or vice versa)
+    }
+    setIsMuted((m) => !m);
+  }, [isMuted]);
+
+  const toggleSpeaker = useCallback(() => {
+    const el = remoteAudioRef.current;
+    if (el) {
+      el.muted = isSpeakerOn; // was on, now mute (or vice versa)
+    }
+    // Also mute the remote audio track if available
+    const remoteTrack = remoteAudioTrackRef.current;
+    if (remoteTrack) {
+      remoteTrack.setVolume(isSpeakerOn ? 0 : 100);
+    }
+    setIsSpeakerOn((s) => !s);
+  }, [isSpeakerOn]);
 
   const joinVoiceChannel = useCallback(async (
     channelName: string,
@@ -1283,6 +1343,68 @@ export default function PrivateChatPage() {
     }
   };
 
+  // ── Voice message ───────────────────────────────────────────
+
+  const handleVoiceRecorded = async (file: File, durationSec: number) => {
+    privateDebugLog("handleVoiceRecorded:start", {
+      activeConvId,
+      fileSize: file.size,
+      durationSec,
+    });
+    if (!activeConvId || !user) return;
+
+    try {
+      setActionError(null);
+      setUploadProgressPct(0);
+
+      const convKey = await resolveConversationKey(activeConvId);
+
+      setSending(true);
+      const uploaded = await uploadFile(file, "private-chat", (pct) => {
+        setUploadProgressPct(pct);
+      });
+
+      const { ciphertext, iv } = await encryptMessage(
+        `[Voice message: ${durationSec}s]`,
+        convKey
+      );
+
+      const token = await auth.currentUser?.getIdToken();
+      const msgRes = await fetch(`/api/conversations/${activeConvId}/messages`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          type: "voice",
+          ciphertext,
+          iv,
+          attachment: {
+            url: uploaded.url,
+            publicId: uploaded.publicId,
+            resourceType: uploaded.resourceType,
+            bytes: uploaded.bytes,
+            mime: file.type,
+            originalName: file.name,
+            durationSec,
+          },
+        }),
+      });
+      if (!msgRes.ok) {
+        const msgData = await msgRes.json().catch(() => ({} as { error?: string }));
+        throw new Error(msgData.error || `Voice message failed (HTTP ${msgRes.status})`);
+      }
+    } catch (err) {
+      console.error("[ByteReaper] handleVoiceRecorded:error", err);
+      setActionError(err instanceof Error ? err.message : "Voice message failed.");
+    } finally {
+      setSending(false);
+      setUploadProgressPct(0);
+      privateDebugLog("handleVoiceRecorded:end", { activeConvId });
+    }
+  };
+
   // ── Voice call ───────────────────────────────────────────
 
   const handleVoiceCall = async () => {
@@ -1455,6 +1577,10 @@ export default function PrivateChatPage() {
             peerName={callStatus.peerName}
             status={callStatus.status}
             onEnd={handleEndCall}
+            isMuted={isMuted}
+            onToggleMute={toggleMute}
+            isSpeakerOn={isSpeakerOn}
+            onToggleSpeaker={toggleSpeaker}
           />
         )}
       </AnimatePresence>
@@ -1675,6 +1801,11 @@ export default function PrivateChatPage() {
                   }}
                   placeholder="Type a message... (@ByteReaper for AI)"
                   className="flex-1"
+                />
+
+                <VoiceRecorder
+                  onRecorded={handleVoiceRecorded}
+                  disabled={sending}
                 />
 
                 <Button

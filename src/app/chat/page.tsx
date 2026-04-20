@@ -844,6 +844,8 @@ export default function PrivateChatPage() {
   const acceptedIncomingCallIdRef = useRef<string | null>(null);
   const callAcceptedAtRef = useRef<number | null>(null);
   const summarySentRef = useRef<Set<string>>(new Set());
+  const callerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const callerCallUnsubRef = useRef<(() => void) | null>(null);
 
   const activeConversation = useMemo(
     () => conversations.find((c) => c.id === activeConvId) ?? null,
@@ -1198,10 +1200,21 @@ export default function PrivateChatPage() {
     return unwrapped;
   }, [bootstrapConversationKey, convKeyCache, conversations, privateKey, profile]);
 
-  const cleanupActiveCall = useCallback(async (reason: string, markEnded = false) => {
-    privateDebugLog("call:cleanup:start", {
+  // Cleanup caller-side listeners
+  const cleanupCallerListeners = useCallback(() => {
+    if (callerTimeoutRef.current) {
+      clearTimeout(callerTimeoutRef.current);
+      callerTimeoutRef.current = null;
+    }
+    if (callerCallUnsubRef.current) {
+      callerCallUnsubRef.current();
+      callerCallUnsubRef.current = null;
+    }
+  }, []);
+
+  const cleanupAgoraClient = useCallback(async (reason: string) => {
+    privateDebugLog("call:cleanup-agora:start", {
       reason,
-      markEnded,
       channelName: activeCallChannelRef.current,
     });
 
@@ -1228,15 +1241,15 @@ export default function PrivateChatPage() {
       callClientRef.current = null;
     }
 
-    if (markEnded && activeCallChannelRef.current) {
-      const channelName = activeCallChannelRef.current;
-      await updateDoc(doc(db, "calls", channelName), {
-        status: "ended",
-        endedAt: serverTimestamp(),
-      }).catch((updateErr) => {
-        console.error("[ByteReaper] call:cleanup:update-ended-error", updateErr);
-      });
-    }
+    privateDebugLog("call:cleanup-agora:end", { reason });
+  }, []);
+
+  const cleanupCallUI = useCallback((reason: string) => {
+    privateDebugLog("call:cleanup-ui:start", {
+      reason,
+      channelName: activeCallChannelRef.current,
+    });
+    cleanupCallerListeners();
 
     activeCallChannelRef.current = null;
     acceptedIncomingCallIdRef.current = null;
@@ -1245,8 +1258,8 @@ export default function PrivateChatPage() {
     setCallStartTime(null);
     setIsMuted(false);
     setIsSpeakerOn(true);
-    privateDebugLog("call:cleanup:end", { reason });
-  }, []);
+    privateDebugLog("call:cleanup-ui:end", { reason });
+  }, [cleanupCallerListeners]);
 
   const toggleMute = useCallback(() => {
     const track = localAudioTrackRef.current;
@@ -1280,7 +1293,7 @@ export default function PrivateChatPage() {
       throw new Error("User is not authenticated.");
     }
 
-    await cleanupActiveCall("join-new-channel", false);
+    await cleanupAgoraClient("join-new-channel");
 
     const token = await auth.currentUser?.getIdToken();
     const res = await fetch("/api/agora/token", {
@@ -1344,7 +1357,7 @@ export default function PrivateChatPage() {
     localAudioTrackRef.current = localAudioTrack;
     activeCallChannelRef.current = channelName;
     privateDebugLog("call:join:end", { channelName, peerName });
-  }, [cleanupActiveCall, user]);
+  }, [cleanupAgoraClient, user]);
 
   // ── Send a system message for call events ─────────────────
 
@@ -1763,21 +1776,6 @@ export default function PrivateChatPage() {
 
   // ── Voice call ───────────────────────────────────────────
 
-  const callerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const callerCallUnsubRef = useRef<(() => void) | null>(null);
-
-  // Cleanup caller-side listeners
-  const cleanupCallerListeners = useCallback(() => {
-    if (callerTimeoutRef.current) {
-      clearTimeout(callerTimeoutRef.current);
-      callerTimeoutRef.current = null;
-    }
-    if (callerCallUnsubRef.current) {
-      callerCallUnsubRef.current();
-      callerCallUnsubRef.current = null;
-    }
-  }, []);
-
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -1841,7 +1839,8 @@ export default function PrivateChatPage() {
               endedAt: serverTimestamp(),
             });
             await sendCallSummaryOnce(convId, channelName, "missed");
-            await cleanupActiveCall("caller-timeout", false);
+            await cleanupAgoraClient("caller-timeout");
+            cleanupCallUI("caller-timeout");
           }
         } catch (e) {
           console.error("[ByteReaper] callerTimeout:error", e);
@@ -1856,11 +1855,13 @@ export default function PrivateChatPage() {
         if (data.status === "rejected") {
           cleanupCallerListeners();
           await sendCallSummaryOnce(convId, channelName, "declined");
-          await cleanupActiveCall("callee-rejected", false);
+          await cleanupAgoraClient("callee-rejected");
+          cleanupCallUI("callee-rejected");
         } else if (data.status === "missed") {
           cleanupCallerListeners();
           await sendCallSummaryOnce(convId, channelName, "missed");
-          await cleanupActiveCall("callee-missed", false);
+          await cleanupAgoraClient("callee-missed");
+          cleanupCallUI("callee-missed");
         } else if (data.status === "accepted") {
           // Clear timeout — call is active now
           if (callerTimeoutRef.current) {
@@ -1876,14 +1877,15 @@ export default function PrivateChatPage() {
           cleanupCallerListeners();
           const durationSec = computeCallDurationSec();
           await sendCallSummaryOnce(convId, channelName, "duration", durationSec);
-          await cleanupActiveCall("call-ended-normally", false);
+          await cleanupAgoraClient("call-ended-normally");
+          cleanupCallUI("call-ended-normally");
         }
       });
     } catch (err) {
       console.error("[ByteReaper] handleVoiceCall:error", err);
       setActionError(err instanceof Error ? err.message : "Voice call failed.");
-      setCallStatus(null);
-      cleanupCallerListeners();
+      await cleanupAgoraClient("handleVoiceCall-error");
+      cleanupCallUI("handleVoiceCall-error");
     } finally {
       privateDebugLog("handleVoiceCall:end", { activeConvId });
     }
@@ -1921,7 +1923,8 @@ export default function PrivateChatPage() {
     });
 
     cleanupCallerListeners();
-    await cleanupActiveCall("manual-end-call", false);
+    await cleanupAgoraClient("manual-end-call");
+    cleanupCallUI("manual-end-call");
     privateDebugLog("handleEndCall:end");
   };
 
@@ -2000,7 +2003,8 @@ export default function PrivateChatPage() {
               durationSec
             );
             cleanupCallerListeners();
-            await cleanupActiveCall("remote-ended-call", false);
+            await cleanupAgoraClient("remote-ended-call");
+            cleanupCallUI("remote-ended-call");
           }
         }
       },
@@ -2013,7 +2017,7 @@ export default function PrivateChatPage() {
       privateDebugLog("incomingCallEffect:cleanup", { uid: user.uid });
       unsubscribe();
     };
-  }, [cleanupActiveCall, computeCallDurationSec, joinVoiceChannel, peerProfiles, sendCallSummaryOnce, user]);
+  }, [cleanupAgoraClient, cleanupCallUI, computeCallDurationSec, joinVoiceChannel, peerProfiles, sendCallSummaryOnce, user]);
 
   // ── Peer info helper ─────────────────────────────────────
 

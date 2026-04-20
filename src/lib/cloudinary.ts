@@ -19,11 +19,9 @@ export async function uploadFile(
   fileName: string,
   mimeType: string
 ): Promise<UploadResult> {
-  const isImage = mimeType.startsWith('image/');
-
   const result = await uploadBufferToCloudinary(fileBuffer, {
     folder: `bytereaper`,
-    resource_type: isImage ? 'image' : 'raw',
+    resource_type: 'auto',
     use_filename: true,
     unique_filename: true,
   });
@@ -32,7 +30,7 @@ export async function uploadFile(
     url: result.secure_url,
     publicId: result.public_id,
     provider: 'cloudinary',
-    type: isImage ? 'image' : 'file',
+    type: mimeType.startsWith('image/') ? 'image' : 'file',
     name: fileName,
   };
 }

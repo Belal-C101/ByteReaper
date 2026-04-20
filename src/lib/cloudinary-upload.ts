@@ -47,15 +47,9 @@ export async function uploadToCloudinary(
     );
   }
 
-  // Use explicit resource type so document files are stored as `raw` instead of `image`.
-  // This avoids Cloudinary document delivery issues on some accounts.
-  const resourceType = file.type.startsWith("image/")
-    ? "image"
-    : file.type.startsWith("video/") || file.type.startsWith("audio/")
-      ? "video"
-      : "raw";
-
-  const endpoint = `https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`;
+  // Always use /auto/upload so PDFs, audio, video, images all work correctly.
+  // Cloudinary determines the correct resource_type automatically.
+  const endpoint = `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`;
 
   const formData = new FormData();
   formData.append("file", file);
@@ -128,4 +122,20 @@ export async function uploadToCloudinary(
 
     xhr.send(formData);
   });
+}
+
+/** Build a forced-download URL by injecting fl_attachment after /upload/ */
+export function toDownloadUrl(secureUrl: string, filename?: string): string {
+  const marker = "/upload/";
+  const i = secureUrl.indexOf(marker);
+  if (i === -1) return secureUrl;
+  const flag = filename
+    ? `fl_attachment:${encodeURIComponent(filename.replace(/\.[^.]+$/, ""))}`
+    : "fl_attachment";
+  return (
+    secureUrl.slice(0, i + marker.length) +
+    flag +
+    "/" +
+    secureUrl.slice(i + marker.length)
+  );
 }

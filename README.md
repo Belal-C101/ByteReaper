@@ -300,6 +300,22 @@ MIT License - feel free to use this project for personal or commercial purposes.
 
 ---
 
+## Cloudinary Setup
+
+To ensure file uploads (images, PDFs, audio, video) work correctly:
+
+1. **Upload preset** — In the Cloudinary Dashboard, go to **Settings → Upload** and create (or verify) an upload preset:
+   - **Signing mode**: `Unsigned`
+   - **Delivery type**: `upload`
+   - **Access mode**: `public`
+2. **Restricted media types** — In **Settings → Security**, ensure PDF, audio, and video are **not** restricted if you want them publicly deliverable.
+3. **Environment variables** — Set `NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME` and `NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET` in your `.env.local`.
+4. **Server-side admin operations** (optional, for profile deletion cleanup) — Set `CLOUDINARY_API_KEY` and `CLOUDINARY_API_SECRET`.
+
+> **Optional hardening**: For signed delivery, switch to server-side signed uploads via a Next.js API route. This is not required for the default unsigned flow.
+
+---
+
 <div align="center">
 
 **Built with 💜 by ByteReaper Team**

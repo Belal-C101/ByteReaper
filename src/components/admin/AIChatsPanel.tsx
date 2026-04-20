@@ -26,9 +26,6 @@ import {
   Clock,
   Archive,
   RefreshCw,
-  Download,
-  ExternalLink,
-  FileText,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
@@ -36,6 +33,7 @@ import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { cn } from "@/lib/utils";
+import { Attachment } from "@/components/chat/Attachment";
 
 interface StoredMessagePair {
   userMessage: string;
@@ -438,36 +436,14 @@ export function AIChatsPanel() {
 }
 
 function AdminFileCard({ link }: { link: { url: string; name: string; provider?: string } }) {
-  const proxyOpenHref = `/api/file-proxy?url=${encodeURIComponent(link.url)}&name=${encodeURIComponent(link.name)}&disposition=inline`;
-  const proxyHref = `/api/file-proxy?url=${encodeURIComponent(link.url)}&name=${encodeURIComponent(link.name)}&disposition=attachment`;
   return (
-    <div className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-secondary/60 border border-border/30 text-xs">
-      <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-      <span className="truncate max-w-[160px] text-foreground" title={link.name}>
-        {link.name}
-      </span>
-      {link.provider && (
-        <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
-          {link.provider}
-        </Badge>
-      )}
-      <a
-        href={proxyOpenHref}
-        target="_blank"
-        rel="noopener noreferrer"
-        title="Open in new tab"
-        className="text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <ExternalLink className="h-3.5 w-3.5" />
-      </a>
-      <a
-        href={proxyHref}
-        title="Download"
-        className="text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <Download className="h-3.5 w-3.5" />
-      </a>
-    </div>
+    <Attachment
+      attachment={{
+        url: link.url,
+        originalName: link.name,
+      }}
+      compact
+    />
   );
 }
 

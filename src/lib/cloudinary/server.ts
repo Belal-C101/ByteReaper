@@ -32,7 +32,7 @@ export function assertCloudinaryConfigured() {
   }
 }
 
-export type CloudinaryResourceType = "image" | "raw" | "video";
+export type CloudinaryResourceType = "image" | "raw" | "video" | "auto";
 
 export async function uploadBufferToCloudinary(
   buffer: Buffer,

@@ -1,323 +1,270 @@
-# 🦴 ByteReaper - AI Developer Assistant
+# ByteReaper
 
-<div align="center">
+ByteReaper is a full-stack AI developer workspace built with Next.js, Firebase, OpenRouter, Cloudinary, and Netlify. It combines a multi-model coding assistant, repository analysis, encrypted private messaging, file-aware chat, and a catalog of 53 developer tools in one authenticated web application.
 
-![ByteReaper](https://img.shields.io/badge/ByteReaper-AI%20Developer%20Assistant-purple?style=for-the-badge)
-![Next.js](https://img.shields.io/badge/Next.js-15-black?style=for-the-badge&logo=next.js)
-![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?style=for-the-badge&logo=typescript)
-![OpenRouter](https://img.shields.io/badge/OpenRouter-AI-green?style=for-the-badge)
-![Firebase](https://img.shields.io/badge/Firebase-Auth-orange?style=for-the-badge&logo=firebase)
-[![Netlify Status](https://img.shields.io/badge/Netlify-Ready-00C7B7?style=for-the-badge&logo=netlify)](https://bytereaber.netlify.app)
+Live site: https://bytereaber.netlify.app
+Repository: https://github.com/Belal-C101/ByteReaper
 
-**Your AI-powered developer companion. Chat with multiple AI models, analyze code, search the web, and review repositories.**
+## What ByteReaper Does
 
-[Live Demo](https://bytereaber.netlify.app) • [Features](#features) • [Getting Started](#getting-started) • [Deploy](#deployment)
+ByteReaper is designed for developers who want one workspace for coding help, source analysis, web research, quick utilities, and private technical communication.
 
-</div>
+- AI chat with streaming responses, model switching, file context, image understanding, web search, prompt templates, slash commands, saved sessions, archives, and shared chat snapshots.
+- GitHub repository analysis with code-quality, security, performance, architecture, documentation, and testing scores.
+- Cloudinary-backed uploads for source files, documents, images, audio, and video metadata.
+- Firebase Authentication with email/password and Google sign-in.
+- Firestore persistence for user profiles, AI chat history, archived chats, shared chats, prompt templates, tool favorites, private messenger profiles, encrypted conversations, and call records.
+- Private messenger with client-side encryption, key wrapping, file attachments, voice messages, read receipts, and Agora voice calls.
+- Admin dashboard for user management, AI chat review, messenger review, and masked diagnostics.
+- Five visual themes: dark, light, ocean, forest, and sunset.
+- Protected in-app project documentation at `/docs`.
 
----
+## AI Model Catalog
 
-## ✨ Features
+The model source of truth is `src/lib/ai/gemini.ts`. All model requests go through OpenRouter.
 
-### 🤖 Multi-Model AI Chat
-- **7 Free AI Models** via OpenRouter:
-  - 🎲 Auto (recommended) - Automatically routes to best available model
-  - ⚡ Nvidia Nemotron 120B - Powerful reasoning
-  - 🚀 MiniMax M2.5 - Fast responses
-  - 🧠 StepFun 3.5 Flash - Advanced reasoning (196B MoE)
-  - 🎨 Arcee Trinity - Creative tasks (400B MoE)
-  - 💭 Liquid LFM 1.2B Thinking - Deep reasoning
-  - 📝 Liquid LFM 1.2B Instruct - Instruction following
-- Switch models on the fly
-- Context-aware responses
-- Code explanation and generation
+| Key | Model | Provider | Classification | Vision | Primary role |
+| --- | --- | --- | --- | --- | --- |
+| `auto` | Auto (Best Available) | OpenRouter | Router | Yes | Default routing when no specialist model is required. |
+| `gemini-flash` | Gemini 2.5 Flash | Google | Primary vision model | Yes | Image and screenshot analysis, multimodal prompts, fast coding help. |
+| `gemini-flash-lite` | Gemini 2.5 Flash Lite | Google | Lightweight vision fallback | Yes | Fast multimodal fallback for image prompts. |
+| `nemotron` | Nemotron 3 Super 120B | NVIDIA | Large reasoning model | No | Deep code reasoning, architecture review, complex explanations. |
+| `qwen-plus` | Qwen 3.6 Plus | Qwen | Reasoning-oriented model | No | Structured analysis, planning, and code-heavy reasoning. |
+| `minimax` | MiniMax M2.5 | MiniMax | Fast general model | No | Low-latency chat, summaries, and everyday coding assistance. |
+| `liquid` | LFM 2.5 Instruct | LiquidAI | Instruction-following model | No | Concise transformations and deterministic utility responses. |
 
-### 🔐 User Authentication
-- Email/password authentication
-- Google OAuth sign-in
-- Protected chat interface
-- Persistent user sessions
-- Secure Firebase backend
+When an uploaded image is present and the selected model does not support vision, ByteReaper automatically switches to Gemini 2.5 Flash. Streaming vision requests can fall back through Gemini 2.5 Flash Lite and Auto.
 
-### 💾 Chat History
-- Auto-save conversations to Firestore
-- Chat sessions per user
-- Resume previous conversations
-- Never lose your work
+## Developer Tools
 
-### 📁 File Upload & Analysis
-- Drag & drop file support
-- Support for 20+ programming languages
-- Instant code review
-- Security vulnerability detection
+The tools hub is driven by `src/lib/tools/catalog.ts`. Users can search, filter by category, open individual tools, and save favorites locally and in Firestore.
 
-### 🔍 Web Search
-- Built-in DuckDuckGo search (free, no API key)
-- Search for documentation
-- Find tutorials and solutions
-- Research best practices
+### Utilities
 
-### 📊 GitHub Repository Analysis
-- Analyze public repositories
-- Code quality scoring
-- Architecture review
-- Security findings
-- Performance recommendations
+| Tool | Capability |
+| --- | --- |
+| JSON Formatter & Validator | Formats, minifies, validates, and inspects JSON with tree view. |
+| Regex Tester | Tests expressions live with flags, matches, captures, and common pattern presets. |
+| JWT Decoder | Decodes JWT header and payload and explains common claims. |
+| Hash Generator | Generates MD5, SHA-1, SHA-256, and SHA-512 hashes for text or uploaded files. |
+| Diff Viewer | Compares two text inputs and displays a color-coded unified diff. |
+| Color Tools | Converts colors, checks contrast, builds palettes, and creates gradients. |
+| Chmod Calculator | Calculates Unix permissions in visual, numeric, and symbolic forms. |
+| Crontab Translator | Explains cron expressions and previews upcoming run times. |
+| Markdown Editor & Preview | Provides split-pane Markdown editing with HTML export. |
+| SQL Formatter | Formats SQL across popular dialects. |
+| HTML/CSS/JS Playground | Runs a three-pane live playground with console capture. |
 
----
+### Converters
 
-## 🚀 Getting Started
+| Tool | Capability |
+| --- | --- |
+| Base64 Encoder/Decoder | Encodes and decodes text and files. |
+| Unix Timestamp Converter | Converts timestamps to dates and dates back to timestamps with timezone support. |
+| URL Encoder/Decoder | Encodes, decodes, and edits URL components. |
+| HTML Entity Encoder/Decoder | Converts special characters to named or numeric HTML entities and back. |
+| CSS Unit Converter | Converts between px, rem, em, vh, vw, percent, and pt. |
+| Number Base Converter | Converts numbers between bases and supports bitwise operations. |
+| Data Converter Hub | Converts between JSON, YAML, CSV, XML, and TOML. |
+| Image to Base64 | Converts images to Base64 with preview and snippet output. |
+| Byte/Unit Converter | Converts storage units and estimates transfer durations. |
 
-### Prerequisites
-- Node.js 18+ 
-- npm or yarn
-- OpenRouter API key (free)
-- Firebase project (free)
+### Generators
 
-### Installation
+| Tool | Capability |
+| --- | --- |
+| UUID Generator | Generates and validates UUID values, including bulk output and nil mode. |
+| Lorem Ipsum Generator | Produces placeholder copy, including developer-themed text. |
+| Password Generator | Creates secure passwords with strength scoring. |
+| QR Code Generator | Generates downloadable QR codes with style controls. |
+
+### API Tools
+
+| Tool | Capability |
+| --- | --- |
+| HTTP Request Tester | Sends API requests with headers, body, response timing, and response inspection. |
+| IP & Network Info | Looks up IP geolocation and ISP data with map visualization. |
+| DNS Lookup | Inspects DNS records through public resolver APIs. |
+| SSL Certificate Checker | Checks issuer, validity, SANs, and certificate chain information. |
+| NPM Package Search | Searches npm packages and includes package-size insights. |
+| PyPI Package Search | Looks up Python package metadata and project links. |
+| Tech News Aggregator | Browses top stories from Hacker News, Dev.to, and Reddit. |
+| GitHub Trending | Discovers trending repositories by language and period. |
+| StackOverflow Search | Finds relevant questions and accepted answers. |
+| Public API Directory | Filters and searches public APIs by category and auth model. |
+| Website Screenshot / Preview | Generates site previews and inspects page metadata. |
+
+### AI Tools
+
+| Tool | Capability |
+| --- | --- |
+| Commit Message Generator | Generates concise commit messages from change descriptions. |
+| README Generator | Creates polished README drafts with Markdown preview. |
+| Code Translator | Translates code between popular languages while preserving behavior. |
+| Error Explainer | Explains stack traces, root causes, and concrete fixes. |
+| SQL Generator | Converts natural language and optional schemas into SQL. |
+| API Doc Generator | Generates endpoint documentation in Markdown or JSON style. |
+| Code Reviewer | Produces structured review feedback grouped by severity. |
+| Interview Question Generator | Creates interview questions with model answers. |
+| Learning Roadmap Generator | Builds phased roadmaps with milestones and free resources. |
+| Changelog Generator | Turns logs into release changelogs. |
+| Tech Stack Recommender | Recommends practical, free-first stacks with trade-offs. |
+| Code Complexity Analyzer | Estimates complexity and suggests refactoring actions. |
+
+### Reference
+
+| Tool | Capability |
+| --- | --- |
+| HTTP Status Codes | Searches HTTP codes grouped by response class. |
+| MIME Types Reference | Looks up MIME types by extension and category. |
+| Git Cheatsheet | Lists common Git commands with examples. |
+| Keyboard Shortcuts | References shortcuts for VS Code, Chrome DevTools, Terminal, Vim, and GitHub. |
+| Design Patterns | Explains pattern intent, usage guidance, and examples. |
+| Big-O Cheatsheet | Compares algorithm and data structure complexity. |
+
+## Core Architecture
+
+```text
+src/
+  app/                  Next.js App Router pages and API routes
+  components/           Chat, tools, admin, report, messenger, shared, and UI components
+  contexts/             Firebase auth context
+  hooks/                Client hooks such as admin detection
+  lib/                  AI, persistence, uploads, GitHub, search, crypto, tools, docs, and utilities
+  types/                Shared TypeScript contracts
+public/                 Brand assets
+scripts/                Migration and maintenance scripts
+```
+
+### Runtime Flow
+
+1. `AuthProvider` subscribes to Firebase Auth and exposes the current user.
+2. Protected pages use `ProtectedRoute`; admin pages add `useIsAdmin`.
+3. Chat requests stream through `/api/chat/stream`.
+4. `streamAgentMessage` builds prompt context, adds recent history, handles files, performs optional search, selects the correct model, and streams OpenRouter output.
+5. File uploads go directly to Cloudinary where possible.
+6. `chat-history.ts` persists compact message pairs in Firestore without storing raw binary attachment content.
+7. Tool pages either run locally in the browser, call scoped API routes, or stream AI output through the shared AI tool workbench.
+
+## Source Documentation
+
+The application includes protected project documentation at `/docs`. It covers:
+
+- Product flow across chat, tools, messenger, analysis, reports, and admin.
+- Model classification and routing behavior.
+- Complete tool catalog grouped by category.
+- Curated file-by-file source documentation for routes, API endpoints, components, libraries, persistence, encryption, scripts, and configuration.
+- Privacy boundaries for secrets, API keys, Cloudinary credentials, Firebase private keys, and user data.
+
+The documentation is intentionally architectural and source-oriented. It does not include private `.env` values, API keys, user records, or secret material.
+
+## Tech Stack
+
+| Layer | Technology |
+| --- | --- |
+| Framework | Next.js 15 App Router |
+| UI | React 19, Tailwind CSS, Radix UI primitives, lucide-react, framer-motion |
+| AI | OpenRouter chat completions and streaming |
+| Auth | Firebase Authentication |
+| Database | Firestore |
+| Uploads | Cloudinary browser uploads and server helpers |
+| Private chat crypto | libsodium-wrappers-sumo |
+| Voice calls | Agora RTC and Agora access tokens |
+| Repository access | Octokit and GitHub REST API |
+| Search | DuckDuckGo HTML and instant-answer endpoints |
+| Deployment | Netlify with `@netlify/plugin-nextjs` |
+
+## Environment Variables
+
+Only variable names belong in documentation. Never commit real secrets.
+
+| Variable | Required | Used by |
+| --- | --- | --- |
+| `OPENROUTER_API_KEY` | Yes | Server-side AI chat, streaming, repository analysis, and AI tools. |
+| `NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME` | Yes for uploads | Client-side Cloudinary direct uploads. |
+| `NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET` | Yes for uploads | Unsigned Cloudinary browser upload preset. |
+| `CLOUDINARY_CLOUD_NAME` | Required for server Cloudinary helpers | Server-side Cloudinary URL signing/admin operations. |
+| `CLOUDINARY_API_KEY` | Required for server Cloudinary helpers | Server-side Cloudinary signing/admin operations. |
+| `CLOUDINARY_API_SECRET` | Required for server Cloudinary helpers | Server-side Cloudinary signing/admin operations. |
+| `CLOUDINARY_UPLOAD_FOLDER` | Optional | Server-side upload folder, defaults to `bytereaper`. |
+| `FIREBASE_PROJECT_ID` | Required for admin APIs | Firebase Admin SDK. |
+| `FIREBASE_CLIENT_EMAIL` | Required for admin APIs | Firebase Admin SDK service account. |
+| `FIREBASE_PRIVATE_KEY` | Required for admin APIs | Firebase Admin SDK service account key. |
+| `AGORA_APP_ID` | Required for voice calls | Server-side Agora token generation. |
+| `AGORA_APP_CERTIFICATE` | Required for voice calls | Server-side Agora token generation. |
+| `NEXT_PUBLIC_AGORA_APP_ID` | Required for voice calls | Client-side Agora SDK. |
+| `GITHUB_TOKEN` | Optional | Higher GitHub API rate limits through Octokit. |
+| `NEXT_PUBLIC_APP_URL` | Optional | OpenRouter referer header. |
+| `NEXT_PUBLIC_BYTEREAPER_DEBUG` | Optional | Client-side debug logging when set to `1`. |
+
+## Cloudinary Behavior
+
+Uploads use `https://api.cloudinary.com/v1_1/<cloud>/auto/upload` so Cloudinary can classify images, videos, audio, PDFs, and raw documents correctly.
+
+- The browser upload path uses a public cloud name and unsigned upload preset.
+- Server-side signing and private download helpers use Cloudinary API credentials through environment variables.
+- `/api/file-proxy` only accepts Cloudinary hosts and tries safe delivery candidates for inline viewing and downloads.
+- Firestore stores hosted links and lightweight metadata, not the binary file payload.
+
+## Firestore Collections
+
+Important collections referenced by the app and security rules:
+
+- `users`: authenticated user profile metadata.
+- `chat_session`: active AI chat sessions stored as single documents.
+- `archived_chats`: archived AI chat sessions.
+- `shared_chats`: intentionally public chat snapshots.
+- `user_prompt_templates`: saved prompt templates.
+- `user_tool_favorites`: saved tools hub favorites.
+- `user_profiles`: messenger profiles and public keys.
+- `conversations`: private messenger conversations and encrypted key metadata.
+- `conversations/{id}/messages`: encrypted messenger messages.
+- `calls`: voice call metadata.
+- `private_users`: private messenger password hash/salt records.
+
+## Local Development
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/bytereaper.git
-cd bytereaper
-
-# Install dependencies
 npm install
-
-# Generate source files (if not present)
-node generate-source.js
-node generate-v2-features.js
-
-# Setup Firebase authentication
-node setup-firebase.js
-
-# Create environment file
-cp .env.example .env.local
-
-# Add your API keys to .env.local
-# OPENROUTER_API_KEY=your_key_here
-# GITHUB_TOKEN=your_token_here (optional)
-
-# Start development server
+copy .env.example .env.local
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) and create an account!
+Open http://localhost:3000.
 
----
+Recommended setup checks:
 
-## 🔑 Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `OPENROUTER_API_KEY` | Yes | OpenRouter API key ([Get free key](https://openrouter.ai/keys)) |
-| `GITHUB_TOKEN` | No | GitHub Personal Access Token (increases rate limits) |
-| `NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME` | Yes (for uploads) | Cloudinary cloud name used for direct browser uploads |
-| `NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET` | Yes (for uploads) | Cloudinary unsigned upload preset |
-
-**Note:** Firebase configuration is stored in `src/lib/firebase.ts` (not in .env)
-
-For production on Netlify, add both Cloudinary variables in Site settings -> Environment variables.
-
----
-
-## 🔥 Firebase Setup
-
-Firebase is used for:
-- User authentication (email/password + Google OAuth)
-- Firestore database for chat history
-- Secure user data isolation
-
-The `setup-firebase.js` script automatically:
-1. Installs Firebase SDK
-2. Creates authentication UI components
-3. Sets up AuthContext and ProtectedRoute
-4. Generates login and signup pages
-
-**Firestore Collections:**
-- `users` - User profiles (uid, email, displayName, createdAt)
-- `chatSessions` - Chat metadata (userId, title, model, timestamp)
-- `chatMessages` - Individual messages (sessionId, userId, role, content)
-
----
-
-## 💬 Usage Examples
-
-### Chat Commands
-
-```
-"Explain this code: [paste code]"
-"Search for React hooks best practices"
-"Analyze github.com/facebook/react"
-"Review this file for security issues"
-"Help me debug this error: [error message]"
-"Write a function that [description]"
+```bash
+npm run build
+npm run check-deploy
 ```
 
-### File Upload
-- Drag and drop files into the chat
-- Supports: .js, .ts, .py, .java, .cpp, .go, .rs, .rb, .php, text/docs, and images
-- Max upload size: 20MB per file
-- Uploads go directly from browser to Cloudinary (unsigned preset), so they do not pass through Netlify functions
-- Image support for diagrams and screenshots
+On Windows PowerShell, `npm.cmd run build` and `npm.cmd run check-deploy` avoid execution-policy issues.
 
----
+## Deployment
 
-## ☁️ Cloudinary Setup
+ByteReaper is configured for Netlify through `netlify.toml`.
 
-1. Create a free Cloudinary account.
-2. Go to **Settings -> Upload**.
-3. Create an upload preset with **Signing Mode = Unsigned**.
-4. Copy your **Cloud name** and the **upload preset name**.
-5. Set these in local development (`.env.local`) and Netlify env vars:
-  - `NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME`
-  - `NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET`
+- Build command: `npm run build`
+- Node version: `20`
+- Netlify plugin: `@netlify/plugin-nextjs`
+- Security headers: frame, MIME, referrer, permissions, and cross-origin resource policy headers.
 
-### Document Delivery Notes
-- Private chat document links are served through `/api/file-proxy` for reliable open/download behavior.
-- New non-image uploads are stored with Cloudinary `raw` resource type to avoid PDF/document delivery failures that can happen on `image/upload` URLs.
-- If old PDF links still return `401` directly from `res.cloudinary.com`, re-upload the file so it is stored as `raw`, or enable PDF/ZIP delivery in Cloudinary security settings.
+Before deployment:
 
-### Model Selection
-- Click the model selector in the top-right of the chat
-- Choose from 7 free AI models
-- Models have different strengths (fast, powerful, thinking, creative)
-- Default "Auto" mode picks the best available model
+1. Configure required environment variables in Netlify.
+2. Add the production domain to Firebase authorized domains.
+3. Publish the current Firestore rules.
+4. Run `npm.cmd run build` and `npm.cmd run check-deploy`.
 
----
+## Privacy and Security Notes
 
-## 🛠️ Tech Stack
+- Do not document or commit real values from `.env`, `.env.local`, Netlify environment settings, Firebase service accounts, Cloudinary secrets, Agora certificates, or OpenRouter keys.
+- Admin diagnostics must remain masked and should report presence, length, or format only.
+- Private messenger content is encrypted before Firestore storage.
+- AI chat attachments are uploaded to Cloudinary and persisted as metadata/links, not Firestore binary blobs.
+- Shared chats are intentionally public snapshots and should contain only content the user chooses to share.
 
-- **Framework**: Next.js 15 with App Router
-- **Language**: TypeScript
-- **Styling**: Tailwind CSS + shadcn/ui
-- **AI**: OpenRouter (7 free models)
-- **Auth**: Firebase Authentication
-- **Database**: Firestore
-- **Search**: DuckDuckGo (free)
-- **GitHub**: Octokit
+## License
 
----
-
-## 📁 Project Structure
-
-```
-bytereaper/
-├── src/
-│   ├── app/                 # Next.js pages
-│   │   ├── api/            # API routes
-│   │   │   ├── chat/       # Chat & streaming endpoints
-│   │   │   ├── search/     # Web search endpoint
-│   │   │   └── analyze/    # Repo analysis endpoint
-│   │   ├── analyze/        # Chat interface page (protected)
-│   │   ├── login/          # Login page
-│   │   ├── signup/         # Signup page
-│   │   └── report/         # Analysis report page
-│   ├── components/         # React components
-│   │   ├── auth/          # Auth components (ProtectedRoute)
-│   │   ├── chat/          # Chat interface
-│   │   ├── landing/       # Landing page
-│   │   ├── report/        # Report components
-│   │   └── ui/            # shadcn/ui components
-│   ├── contexts/          # React contexts
-│   │   └── AuthContext.tsx # Authentication context
-│   ├── lib/               # Core logic
-│   │   ├── ai/            # OpenRouter integration
-│   │   ├── search/        # DuckDuckGo search
-│   │   ├── github/        # GitHub API
-│   │   ├── analysis/      # Code analysis
-│   │   ├── firebase.ts    # Firebase config
-│   │   ├── auth.ts        # Auth functions
-│   │   └── chat-history.ts # Firestore operations
-│   └── types/             # TypeScript types
-├── public/                # Static assets
-├── setup-firebase.js      # Firebase setup script
-└── package.json
-```
-
----
-
-## 🚀 Deployment
-
-### Vercel (Recommended)
-
-1. Push your code to GitHub
-2. Import project to Vercel
-3. Add environment variables:
-   - `OPENROUTER_API_KEY`
-   - `GITHUB_TOKEN` (optional)
-4. Deploy!
-
-### Firebase Security Rules
-
-Add these Firestore rules to protect user data:
-
-```javascript
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    // Users can only read/write their own user document
-    match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-    }
-    
-    // Users can only read/write their own chat sessions
-    match /chatSessions/{sessionId} {
-      allow read, write: if request.auth != null && 
-                           resource.data.userId == request.auth.uid;
-    }
-    
-    // Users can only read/write their own chat messages
-    match /chatMessages/{messageId} {
-      allow read, write: if request.auth != null && 
-                           resource.data.userId == request.auth.uid;
-    }
-  }
-}
-```
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Please read our contributing guidelines first.
-
----
-
-## 📄 License
-
-MIT License - feel free to use this project for personal or commercial purposes.
-
----
-
-## 🙏 Acknowledgments
-
-- [OpenRouter](https://openrouter.ai) - Free AI model access
-- [Firebase](https://firebase.google.com) - Authentication & Database
-- [DuckDuckGo](https://duckduckgo.com) - Free web search
-- [shadcn/ui](https://ui.shadcn.com) - UI components
-- [Next.js](https://nextjs.org) - React framework
-
----
-
-## Cloudinary Setup
-
-To ensure file uploads (images, PDFs, audio, video) work correctly:
-
-1. **Upload preset** — In the Cloudinary Dashboard, go to **Settings → Upload** and create (or verify) an upload preset:
-   - **Signing mode**: `Unsigned`
-   - **Delivery type**: `upload`
-   - **Access mode**: `public`
-2. **Restricted media types** — In **Settings → Security**, ensure PDF, audio, and video are **not** restricted if you want them publicly deliverable.
-3. **Environment variables** — Set `NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME` and `NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET` in your `.env.local`.
-4. **Server-side admin operations** (optional, for profile deletion cleanup) — Set `CLOUDINARY_API_KEY` and `CLOUDINARY_API_SECRET`.
-
-> **Optional hardening**: For signed delivery, switch to server-side signed uploads via a Next.js API route. This is not required for the default unsigned flow.
-
----
-
-<div align="center">
-
-**Built with 💜 by ByteReaper Team**
-
-</div>
+This repository is private application code unless a separate license file states otherwise.

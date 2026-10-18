@@ -7,6 +7,57 @@ import { AI_MODELS, ModelKey, DEFAULT_MODEL } from './gemini';
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
+// ─── Remote Attachments ──────────────────────────────────
+// Binary attachments arrive as Cloudinary URLs instead of base64 so request bodies stay
+// under the hosting platform's 4.5MB limit. They are rehydrated into data URLs here so the
+// document parsers and vision payloads below work unchanged.
+
+const MAX_REMOTE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const REMOTE_ATTACHMENT_TIMEOUT_MS = 20_000;
+
+function isTrustedAttachmentUrl(rawUrl: string): boolean {
+  try {
+    const url = new URL(rawUrl);
+    if (url.protocol !== 'https:' || url.hostname !== 'res.cloudinary.com') return false;
+    const cloudNames = [process.env.CLOUDINARY_CLOUD_NAME, process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME]
+      .filter((name): name is string => !!name);
+    return cloudNames.some((name) => url.pathname.startsWith(`/${name}/`));
+  } catch {
+    return false;
+  }
+}
+
+async function hydrateRemoteAttachment(attachment: FileAttachment): Promise<FileAttachment> {
+  if (attachment.content || !attachment.cloudinaryUrl) return attachment;
+  if (!isTrustedAttachmentUrl(attachment.cloudinaryUrl)) {
+    console.warn(`[ByteReaper] Ignoring untrusted attachment URL for "${attachment.name}"`);
+    return attachment;
+  }
+
+  try {
+    const response = await fetch(attachment.cloudinaryUrl, {
+      signal: AbortSignal.timeout(REMOTE_ATTACHMENT_TIMEOUT_MS),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (Number(response.headers.get('content-length') || 0) > MAX_REMOTE_ATTACHMENT_BYTES) {
+      throw new Error('Attachment exceeds 20MB');
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length > MAX_REMOTE_ATTACHMENT_BYTES) throw new Error('Attachment exceeds 20MB');
+
+    const mimeType = attachment.type || response.headers.get('content-type') || 'application/octet-stream';
+    return { ...attachment, content: `data:${mimeType};base64,${buffer.toString('base64')}` };
+  } catch (error) {
+    console.error(`[ByteReaper] Could not fetch attachment "${attachment.name}":`, error);
+    return attachment;
+  }
+}
+
+function hydrateRemoteAttachments(attachments: FileAttachment[]): Promise<FileAttachment[]> {
+  return Promise.all(attachments.map(hydrateRemoteAttachment));
+}
+
 // ─── Feature Flags ───────────────────────────────────────
 
 export interface ChatFeatures {
@@ -144,6 +195,8 @@ export async function processAgentMessage(
   modelKey: ModelKey = DEFAULT_MODEL,
   features: ChatFeatures = {}
 ): Promise<AgentResponse> {
+  attachments = await hydrateRemoteAttachments(attachments);
+
   // Detect if user wants to search the web
   const searchIntent = features.webSearch ? userMessage : detectSearchIntent(userMessage);
   let searchResults: SearchResult[] | undefined;
@@ -480,6 +533,8 @@ export async function* streamAgentMessage(
   }
 
   console.log(`[ByteReaper] Using model: ${model.id}`);
+
+  attachments = await hydrateRemoteAttachments(attachments);
 
   const hasImages = attachments.some(a => {
     const ext = a.name.split('.').pop()?.toLowerCase() || '';

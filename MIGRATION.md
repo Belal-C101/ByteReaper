@@ -1,5 +1,21 @@
 # Migration Guide
 
+## Hosting: Netlify → Vercel
+
+### What changed
+- **Host**: Deployed on Vercel (project `bytereaper`, https://bytereaper.vercel.app), Git-connected to `main`. The old Netlify site (bytereaber.netlify.app) no longer builds.
+- **Removed**: `netlify.toml` and `@netlify/plugin-nextjs`
+- **Headers**: The security and cache headers from `netlify.toml` now live in `next.config.js` `headers()`
+- **Node**: `22.x` (`engines.node`)
+- **Chat attachments**: Binary or large attachments are sent to `/api/chat/stream` as their Cloudinary URL (`cloudinaryUrl`) instead of base64, and the server fetches them (only from this account's `res.cloudinary.com` path). This keeps request bodies under Vercel's 4.5MB limit while still allowing 20MB files.
+- **Reports**: Analysis reports are stored in Firestore (`analysis_reports`, Admin SDK only) instead of process memory, so `/report/[id]` works across serverless instances.
+
+### Required setup
+- All env vars from `.env.example` plus `NEXT_PUBLIC_APP_URL=https://bytereaper.vercel.app`, set in Vercel for Production, Preview, and Development
+- Add `bytereaper.vercel.app` to Firebase Auth → Settings → Authorized domains
+
+---
+
 ## Upload System: Imgur/tmpfiles → Cloudinary-only
 
 ### What changed
@@ -76,7 +92,7 @@ Updated `firestore.rules` with rules for all new collections. Deploy with:
 firebase deploy --only firestore:rules
 ```
 
-### Netlify headers
-Updated `netlify.toml`:
+### Headers
+Updated security headers (now in `next.config.js`, previously `netlify.toml`):
 - `Permissions-Policy`: `camera=(self), microphone=(self)` (was `camera=(), microphone=()`)
 - Added `Cross-Origin-Resource-Policy: cross-origin`

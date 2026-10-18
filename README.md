@@ -1,8 +1,8 @@
 # ByteReaper
 
-ByteReaper is a full-stack AI developer workspace built with Next.js, Firebase, OpenRouter, Cloudinary, and Netlify. It combines a multi-model coding assistant, repository analysis, encrypted private messaging, file-aware chat, and a catalog of 53 developer tools in one authenticated web application.
+ByteReaper is a full-stack AI developer workspace built with Next.js, Firebase, OpenRouter, Cloudinary, and Vercel. It combines a multi-model coding assistant, repository analysis, encrypted private messaging, file-aware chat, and a catalog of 53 developer tools in one authenticated web application.
 
-Live site: https://bytereaber.netlify.app
+Live site: https://bytereaper.vercel.app
 Repository: https://github.com/Belal-C101/ByteReaper
 
 ## What ByteReaper Does
@@ -172,7 +172,7 @@ The documentation is intentionally architectural and source-oriented. It does no
 | Voice calls | Agora RTC and Agora access tokens |
 | Repository access | Octokit and GitHub REST API |
 | Search | DuckDuckGo HTML and instant-answer endpoints |
-| Deployment | Netlify with `@netlify/plugin-nextjs` |
+| Deployment | Vercel (Git-connected, Fluid compute) |
 
 ## Environment Variables
 
@@ -243,23 +243,23 @@ On Windows PowerShell, `npm.cmd run build` and `npm.cmd run check-deploy` avoid 
 
 ## Deployment
 
-ByteReaper is configured for Netlify through `netlify.toml`.
+ByteReaper is deployed on Vercel as project `bytereaper`, connected to the GitHub repository. Every push to `main` deploys to production; other branches get preview deployments.
 
 - Build command: `npm run build`
-- Node version: `20`
-- Netlify plugin: `@netlify/plugin-nextjs`
-- Security headers: frame, MIME, referrer, permissions, and cross-origin resource policy headers.
+- Node version: `22.x` (`engines.node` in `package.json`)
+- Framework preset: Next.js (no adapter needed)
+- Security headers: frame, MIME, referrer, permissions, and cross-origin resource policy headers, defined in `next.config.js`.
 
 Before deployment:
 
-1. Configure required environment variables in Netlify.
+1. Configure required environment variables in Vercel (Project Settings → Environment Variables). `NEXT_PUBLIC_*` values are inlined at build time, so redeploy after changing them.
 2. Add the production domain to Firebase authorized domains.
 3. Publish the current Firestore rules.
 4. Run `npm.cmd run build` and `npm.cmd run check-deploy`.
 
 ## Privacy and Security Notes
 
-- Do not document or commit real values from `.env`, `.env.local`, Netlify environment settings, Firebase service accounts, Cloudinary secrets, Agora certificates, or OpenRouter keys.
+- Do not document or commit real values from `.env`, `.env.local`, Vercel environment settings, Firebase service accounts, Cloudinary secrets, Agora certificates, or OpenRouter keys.
 - Admin diagnostics must remain masked and should report presence, length, or format only.
 - Private messenger content is encrypted before Firestore storage.
 - AI chat attachments are uploaded to Cloudinary and persisted as metadata/links, not Firestore binary blobs.

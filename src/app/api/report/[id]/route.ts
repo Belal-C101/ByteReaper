@@ -7,7 +7,7 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    const report = getReport(id);
+    const report = await getReport(id);
 
     if (!report) {
       return NextResponse.json(

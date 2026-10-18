@@ -96,6 +96,9 @@ function mainChatDebugLog(message: string, payload?: unknown) {
 
 const MAX_ATTACHMENT_SIZE_BYTES = 20 * 1024 * 1024;
 const MAX_ATTACHMENTS_PER_MESSAGE = 1;
+// Text attachments up to this many chars are sent inline; anything larger or binary is sent
+// as its Cloudinary URL so the request body stays under Vercel's 4.5MB limit.
+const MAX_INLINE_TEXT_ATTACHMENT_CHARS = 200_000;
 const DRAFT_CHAT_ID_PREFIX = "draft-chat-";
 const EMPTY_STATE_PROMPTS = [
   "Review this React component for performance",
@@ -1682,6 +1685,7 @@ export function ChatInterface() {
     // Upload attachments directly to Cloudinary from the browser.
     let uploadedImageLinks: UploadedMediaLink[] = [];
     let uploadedFileLinks: UploadedMediaLink[] = [];
+    const uploadedUrlByAttachmentId = new Map<string, string>();
 
     if (attachments.length > 0) {
       mainChatDebugLog("chatInterface:sendMessage:upload:start", { attachmentCount: attachments.length });
@@ -1722,6 +1726,7 @@ export function ChatInterface() {
             name: attachment.name,
             provider: "cloudinary",
           };
+          uploadedUrlByAttachmentId.set(attachment.id, nextLink.url);
 
           if (getFileType({ name: attachment.name, type: attachment.type }) === "image") {
             uploadedImageLinks.push(nextLink);
@@ -1775,6 +1780,21 @@ export function ChatInterface() {
     mainChatDebugLog("chatInterface:setIsLoading", { next: true, reason: "stream-request-start" });
     setIsLoading(true);
 
+    // Keep the request body small: the server fetches binary/large files from Cloudinary,
+    // and only role/content of past messages is used for model context.
+    const attachmentsForModel = userMessage.attachments?.map(({ preview: _preview, ...attachment }) => {
+      const cloudinaryUrl = uploadedUrlByAttachmentId.get(attachment.id);
+      if (!cloudinaryUrl) return attachment;
+      const isInlineText =
+        typeof attachment.content === "string" &&
+        !attachment.content.startsWith("data:") &&
+        attachment.content.length <= MAX_INLINE_TEXT_ATTACHMENT_CHARS;
+      return isInlineText
+        ? { ...attachment, cloudinaryUrl }
+        : { ...attachment, content: undefined, cloudinaryUrl };
+    });
+    const historyPayload = historyForModel.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp }));
+
     try {
       // Fire the API call INSTANTLY
       const response = await fetch("/api/chat/stream", {
@@ -1782,8 +1802,8 @@ export function ChatInterface() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: userMessage.content,
-          attachments: userMessage.attachments,
-          history: historyForModel,
+          attachments: attachmentsForModel,
+          history: historyPayload,
           model: selectedModel,
           features: {
             webSearch: featureWebSearch || slashResolved.useWebSearch,

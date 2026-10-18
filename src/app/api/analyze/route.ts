@@ -3,6 +3,7 @@ import { analyzeRepository } from "@/lib/analysis/analyzer";
 import { saveReport } from "@/lib/db/client";
 import { parseGitHubUrl } from "@/lib/utils/helpers";
 
+export const runtime = "nodejs";
 export const maxDuration = 120; // 2 minutes max for Vercel
 
 export async function POST(request: NextRequest) {
@@ -39,7 +40,7 @@ export async function POST(request: NextRequest) {
     const result = await analyzeRepository(repoOwner, repoName);
 
     // Save to database
-    saveReport(result);
+    await saveReport(result);
 
     console.log(`Analysis complete for ${repoOwner}/${repoName}, score: ${result.scores.overall}`);
 

@@ -1,4 +1,4 @@
-// Direct unsigned upload to Cloudinary — bypasses Netlify function limits (6MB / 10s)
+// Direct unsigned upload to Cloudinary — bypasses serverless request-body limits (4.5MB on Vercel)
 // Requires NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME and NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET
 // The preset MUST be configured as "Unsigned" in Cloudinary dashboard.
 

@@ -16,7 +16,7 @@ let allChecks = true;
 // Check 1: Required files exist
 console.log('📁 Checking required files...');
 const requiredFiles = [
-  'netlify.toml',
+  'next.config.js',
   '.npmrc',
   'src/lib/firebase.ts',
   'src/lib/auth.ts',
@@ -107,19 +107,15 @@ criticalDeps.forEach(dep => {
 // Final summary
 console.log('\n' + '='.repeat(50));
 if (allChecks) {
-  console.log('✅ All checks passed! Ready to deploy to Netlify!');
+  console.log('✅ All checks passed! Ready to deploy to Vercel!');
   console.log('\n📋 Next steps:');
-  console.log('  1. Commit and push your code to GitHub');
-  console.log('  2. Go to netlify.com and connect your repository');
-  console.log('  3. Add environment variables in Netlify dashboard:');
-  console.log('     - OPENROUTER_API_KEY');
-  console.log('     - GITHUB_TOKEN (optional)');
-  console.log('  4. Add your Netlify URL to Firebase authorized domains');
-  console.log('  5. Deploy!');
-  console.log('\n🚀 Your app will be live at: bytereaber.netlify.app\n');
+  console.log('  1. Commit and push your code to GitHub (main deploys to production)');
+  console.log('  2. Make sure the Vercel project has every variable from .env.example');
+  console.log('  3. Make sure bytereaper.vercel.app is in Firebase authorized domains');
+  console.log('\n🚀 Your app will be live at: https://bytereaper.vercel.app\n');
   process.exit(0);
 } else {
   console.log('❌ Some checks failed! Please fix the issues above.');
-  console.log('\n📖 See DEPLOYMENT.md for detailed instructions.\n');
+  console.log('\n📖 See the Deployment section of README.md for detailed instructions.\n');
   process.exit(1);
 }

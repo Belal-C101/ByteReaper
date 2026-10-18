@@ -404,9 +404,9 @@ export const SOURCE_DOC_SECTIONS: SourceDocSection[] = [
       },
       {
         path: "src/lib/db/client.ts and src/lib/db/schema.ts",
-        purpose: "Local report persistence and report row shape.",
+        purpose: "Firestore-backed report persistence (analysis_reports collection, Admin SDK only) and report row shape.",
         keyParts: ["saveReport", "getReport", "getRecentReports", "getReportByRepo", "ReportRow"],
-        flow: "Stores analysis results for the report viewer and recent-report lookups.",
+        flow: "Stores analysis results in Firestore so the report viewer works across serverless instances.",
       },
       {
         path: "src/lib/tool-favorites.ts",
@@ -512,9 +512,9 @@ export const SOURCE_DOC_SECTIONS: SourceDocSection[] = [
         flow: "Restricts reads and writes to owners, participants, public shared chats, or admins depending on collection.",
       },
       {
-        path: "next.config.js, netlify.toml, tailwind.config.ts, tsconfig.json, postcss.config.js, .eslintrc.json, .npmrc",
+        path: "next.config.js, tailwind.config.ts, tsconfig.json, postcss.config.js, .eslintrc.json, .npmrc",
         purpose: "Framework, deployment, styling, TypeScript, lint, and package-manager configuration.",
-        keyParts: ["Next.js App Router", "Netlify Next plugin", "Tailwind theme", "TypeScript compiler options"],
+        keyParts: ["Next.js App Router", "Security headers (deployed on Vercel)", "Tailwind theme", "TypeScript compiler options"],
         flow: "Define build/runtime behavior and visual tokens.",
       },
       {

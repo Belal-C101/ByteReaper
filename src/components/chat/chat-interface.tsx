@@ -222,10 +222,11 @@ function readFileAsDataUrl(file: File): Promise<string> {
 // The model list comes from /api/models (OpenRouter's free models, newest first).
 type ModelOption = { id: string; name: string; provider: string; supportsVision: boolean };
 
-const DEFAULT_MODEL_ID = "openrouter/auto";
+// Auto picks the best free model on the server (never a paid one)
+const DEFAULT_MODEL_ID = "auto";
 const THINKING_STORAGE_KEY = "bytereaper:thinking";
 const FALLBACK_MODELS: ModelOption[] = [
-  { id: DEFAULT_MODEL_ID, name: "Auto (Best Available)", provider: "OpenRouter", supportsVision: true },
+  { id: DEFAULT_MODEL_ID, name: "Auto (Best Free)", provider: "Free models", supportsVision: true },
 ];
 
 // Shared across selector mounts so the catalog is fetched once per page load
@@ -237,8 +238,8 @@ function loadModelCatalog(): Promise<ModelOption[]> {
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
       .then((data: { models?: ModelOption[] }) => {
         const models = data.models?.length ? data.models : FALLBACK_MODELS;
-        // Only the auto routers means the server couldn't reach OpenRouter; try again on next open
-        if (!models.some((m) => !m.id.startsWith("openrouter/"))) modelCatalogRequest = null;
+        // Only Auto means the server couldn't reach OpenRouter; try again on next open
+        if (!models.some((m) => m.id !== DEFAULT_MODEL_ID)) modelCatalogRequest = null;
         return models;
       })
       .catch((error) => {

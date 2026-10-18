@@ -32,13 +32,13 @@ export interface FlowDoc {
 export const MODEL_DOCS: ModelDoc[] = [
   {
     key: "auto",
-    name: "Auto (Best Available)",
-    provider: "OpenRouter",
-    modelId: "openrouter/auto",
+    name: "Auto (Best Free)",
+    provider: "Free models",
+    modelId: "auto",
     classification: "Router",
     bestFor: "Default chat routing when the user does not need to pick a specialist model.",
     vision: true,
-    notes: "Delegates model selection to OpenRouter and is the app default.",
+    notes: "The app's own router (not openrouter/auto, which bills paid models). Tries the free models ranked by OpenRouter's Artificial Analysis score, moving on when one is down, rate limited or gated.",
   },
   {
     key: "live-free-models",
@@ -48,7 +48,7 @@ export const MODEL_DOCS: ModelDoc[] = [
     classification: "Live catalog",
     bestFor: "Picking a specific free model; the picker lists them newest first.",
     vision: false,
-    notes: "src/lib/ai/models.ts reads OpenRouter's model list (cached for an hour), keeps free text-output chat models, and rejects ids outside that list. Image messages switch to a vision-capable free model when the chosen one cannot read images.",
+    notes: "src/lib/ai/models.ts reads OpenRouter's model list (cached for an hour), keeps free text-output chat models, and treats ids outside that list as Auto, so no request reaches a paid model. The chosen model goes first, then the best-ranked free models as fallbacks; image messages only use vision-capable ones.",
   },
 ];
 

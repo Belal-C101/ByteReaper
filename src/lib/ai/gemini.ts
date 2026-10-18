@@ -2,7 +2,13 @@
 // https://openrouter.ai/docs
 
 import 'server-only';
-import { DEFAULT_MODEL_ID, resolveModel } from './models';
+import {
+  DEFAULT_MODEL_ID,
+  FREE_DAILY_LIMIT_MESSAGE,
+  getModelIdsForRequest,
+  openRouterModelFields,
+  readOpenRouterError,
+} from './models';
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
@@ -17,7 +23,8 @@ export async function generateAnalysis(prompt: string, modelId: string = DEFAULT
     throw new Error('OPENROUTER_API_KEY is not configured. Please add it to your .env.local file.');
   }
 
-  const model = await resolveModel(modelId);
+  // Free models only; OpenRouter moves on to the next one if a model is down or rate limited
+  const modelIds = await getModelIdsForRequest(modelId);
 
   try {
     const response = await fetch(OPENROUTER_API_URL, {
@@ -29,7 +36,7 @@ export async function generateAnalysis(prompt: string, modelId: string = DEFAULT
         'X-Title': 'ByteReaper',
       },
       body: JSON.stringify({
-        model: model.id,
+        ...openRouterModelFields(modelIds),
         messages: [
           {
             role: 'user',
@@ -38,21 +45,21 @@ export async function generateAnalysis(prompt: string, modelId: string = DEFAULT
         ],
         temperature: 0.3,
         max_tokens: 16384,
-        // Reasoning models routed by openrouter/auto otherwise spend the whole token budget
+        // Reasoning models otherwise spend the whole token budget
         // thinking on large repo prompts and return truncated or empty JSON.
         reasoning: { effort: 'low' },
       }),
     });
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      if (response.status === 429) {
+      const message = await readOpenRouterError(response);
+      if (response.status === 429 && message !== FREE_DAILY_LIMIT_MESSAGE) {
         throw new Error('Rate limit exceeded. Please wait a moment and try again.');
       }
-      if (response.status === 401 || response.status === 403) {
+      if (response.status === 401) {
         throw new Error('Invalid OpenRouter API key. Please check your configuration.');
       }
-      throw new Error(error.error?.message || `API error: ${response.status}`);
+      throw new Error(message);
     }
 
     const data = await response.json();
@@ -60,7 +67,7 @@ export async function generateAnalysis(prompt: string, modelId: string = DEFAULT
     const content = choice?.message?.content;
 
     if (choice?.finish_reason === 'length') {
-      throw new Error(`AI response was cut off (token limit reached on ${data.model ?? model.id})`);
+      throw new Error(`AI response was cut off (token limit reached on ${data.model ?? modelIds[0]})`);
     }
     if (!content || content.trim().length === 0) {
       throw new Error('Empty response from AI model');
@@ -84,7 +91,8 @@ export async function chatCompletion(
     throw new Error('OPENROUTER_API_KEY is not configured.');
   }
 
-  const model = await resolveModel(modelId);
+  // Free models only; OpenRouter moves on to the next one if a model is down or rate limited
+  const modelIds = await getModelIdsForRequest(modelId);
   const allMessages: ChatMessage[] = systemPrompt 
     ? [{ role: 'system', content: systemPrompt }, ...messages]
     : messages;
@@ -99,7 +107,7 @@ export async function chatCompletion(
         'X-Title': 'ByteReaper',
       },
       body: JSON.stringify({
-        model: model.id,
+        ...openRouterModelFields(modelIds),
         messages: allMessages,
         temperature: 0.7,
         max_tokens: 4096,
@@ -107,8 +115,7 @@ export async function chatCompletion(
     });
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.error?.message || `API error: ${response.status}`);
+      throw new Error(await readOpenRouterError(response));
     }
 
     const data = await response.json();
@@ -130,7 +137,8 @@ export async function* streamChatCompletion(
     throw new Error('OPENROUTER_API_KEY is not configured.');
   }
 
-  const model = await resolveModel(modelId);
+  // Free models only; OpenRouter moves on to the next one if a model is down or rate limited
+  const modelIds = await getModelIdsForRequest(modelId);
   const allMessages: ChatMessage[] = systemPrompt 
     ? [{ role: 'system', content: systemPrompt }, ...messages]
     : messages;
@@ -144,7 +152,7 @@ export async function* streamChatCompletion(
       'X-Title': 'ByteReaper',
     },
     body: JSON.stringify({
-      model: model.id,
+      ...openRouterModelFields(modelIds),
       messages: allMessages,
       temperature: 0.7,
       max_tokens: 4096,
@@ -153,8 +161,7 @@ export async function* streamChatCompletion(
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error?.message || `API error: ${response.status}`);
+    throw new Error(await readOpenRouterError(response));
   }
 
   const reader = response.body?.getReader();

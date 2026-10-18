@@ -3,7 +3,15 @@ import 'server-only';
 import mammoth from 'mammoth';
 import { searchWeb } from '@/lib/search/duckduckgo';
 import { ChatMessage, FileAttachment, SearchResult } from '@/types/chat';
-import { DEFAULT_MODEL_ID, getVisionModelIds, resolveModel } from './models';
+import {
+  DEFAULT_MODEL_ID,
+  FREE_DAILY_LIMIT_MESSAGE,
+  getModelIdsForRequest,
+  isFreeDailyLimitError,
+  markModelUnavailable,
+  openRouterModelFields,
+  readOpenRouterError,
+} from './models';
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
@@ -210,7 +218,7 @@ export const STREAM_MODEL_META_PREFIX = '__BYTEREAPER_MODEL__:';
 
 async function callOpenRouter(
   messages: { role: string; content: string }[],
-  modelId: string,
+  modelIds: string[],
   stream = false
 ) {
   const apiKey = process.env.OPENROUTER_API_KEY;
@@ -227,7 +235,8 @@ async function callOpenRouter(
       'X-Title': 'ByteReaper',
     },
     body: JSON.stringify({
-      model: modelId,
+      // OpenRouter tries these free models in order until one answers
+      ...openRouterModelFields(modelIds),
       messages,
       temperature: 0.7,
       max_tokens: 8192,
@@ -236,8 +245,7 @@ async function callOpenRouter(
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error?.message || `API error: ${response.status}`);
+    throw new Error(await readOpenRouterError(response));
   }
 
   return response;
@@ -287,20 +295,14 @@ export async function processAgentMessage(
   // Build system prompt based on features
   const systemPrompt = buildSystemPrompt(features);
 
-  // If using an image, we MUST use a vision-capable model
-  const selectedModel = await resolveModel(modelId);
-  const activeModelId = hasImages
-    ? (await getVisionModelIds(selectedModel.id))[0]
-    : selectedModel.id;
-  if (activeModelId !== selectedModel.id) {
-    console.log(`[ByteReaper] Vision required: Switching from ${selectedModel.id} to ${activeModelId}`);
-  }
+  // Free models only; images need vision-capable ones
+  const modelIds = await getModelIdsForRequest(modelId, { needsVision: hasImages });
 
   try {
     const response = await callOpenRouter([
       { role: 'system', content: systemPrompt },
       { role: 'user', content: finalUserContent },
-    ], activeModelId);
+    ], modelIds);
 
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content || '';
@@ -600,17 +602,13 @@ export async function* streamAgentMessage(
     return;
   }
 
-  const model = await resolveModel(modelId);
-  console.log(`[ByteReaper] Using model: ${model.id}`);
-
   const hydratedAttachments = await hydrateRemoteAttachments(attachments);
   const hasImages = hasLoadedImage(hydratedAttachments);
 
-  // Images need a vision-capable model; try the candidates in order until one answers.
-  const candidateModelIds = hasImages ? await getVisionModelIds(model.id) : [model.id];
-  if (candidateModelIds[0] !== model.id) {
-    console.log(`[ByteReaper] Vision required: Switching to ${candidateModelIds[0]}`);
-  }
+  // Free models only, the user's pick first; images need vision-capable ones.
+  // Try the candidates in order until one answers.
+  const candidateModelIds = await getModelIdsForRequest(modelId, { needsVision: hasImages });
+  console.log(`[ByteReaper] Model candidates: ${candidateModelIds.join(', ')}`);
 
   // ── Search (if web search enabled or intent detected) ──
   let searchContext = '';
@@ -688,10 +686,22 @@ export async function* streamAgentMessage(
 
         console.error(`[ByteReaper] API Error ${response.status} with model ${currentModelId}:`, errorBody);
 
-        // Try fallback model for vision tasks
+        // The account-wide daily free quota applies to every free model, so trying others is pointless
+        if (isFreeDailyLimitError(response.status, errorBody)) {
+          yield `Error: ${FREE_DAILY_LIMIT_MESSAGE}`;
+          return;
+        }
+
+        // Gated or removed models fail the same way every time; keep Auto off them for a while
+        if (response.status === 403 || response.status === 404) {
+          markModelUnavailable(currentModelId);
+        }
+
+        // Move on to the next free model
         if (attemptCount < maxAttempts - 1) {
           attemptCount++;
           currentModelId = candidateModelIds[attemptCount];
+          disableReasoning = features.thinking === false;
           console.log(`[ByteReaper] Retrying with fallback model: ${currentModelId}`);
           continue;
         }
@@ -759,10 +769,11 @@ export async function* streamAgentMessage(
         if (done) break;
       }
 
-      // Free providers usually fail inside a 200 stream; move on if nothing was shown yet
-      if (streamError && !hasContent && attemptCount < maxAttempts - 1) {
+      // Free providers often fail (or go silent) inside a 200 stream; move on if nothing was shown yet
+      if (!hasContent && attemptCount < maxAttempts - 1) {
         attemptCount++;
         currentModelId = candidateModelIds[attemptCount];
+        disableReasoning = features.thinking === false;
         console.log(`[ByteReaper] Retrying with fallback model: ${currentModelId}`);
         continue;
       }
@@ -781,6 +792,7 @@ export async function* streamAgentMessage(
       if (!hasContent && attemptCount < maxAttempts - 1) {
         attemptCount++;
         currentModelId = candidateModelIds[attemptCount];
+        disableReasoning = features.thinking === false;
         console.log(`[ByteReaper] Retrying after error with fallback model: ${currentModelId}`);
         continue;
       }

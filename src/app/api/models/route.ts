@@ -6,8 +6,8 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   const models = await getModelCatalog();
-  // Only the pinned routers means the OpenRouter catalog was unreachable; don't cache that
-  const isFallbackList = !models.some((model) => !model.id.startsWith('openrouter/'));
+  // Only Auto means the OpenRouter catalog was unreachable; don't cache that
+  const isFallbackList = !models.some((model) => model.id !== DEFAULT_MODEL_ID);
 
   return NextResponse.json(
     { models, defaultModelId: DEFAULT_MODEL_ID },

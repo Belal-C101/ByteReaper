@@ -94,7 +94,10 @@ export async function generateAnalysis(prompt: string, modelKey: ModelKey = DEFA
           },
         ],
         temperature: 0.3,
-        max_tokens: 8192,
+        max_tokens: 16384,
+        // Reasoning models routed by openrouter/auto otherwise spend the whole token budget
+        // thinking on large repo prompts and return truncated or empty JSON.
+        reasoning: { effort: 'low' },
       }),
     });
 
@@ -110,8 +113,12 @@ export async function generateAnalysis(prompt: string, modelKey: ModelKey = DEFA
     }
 
     const data = await response.json();
-    const content = data.choices?.[0]?.message?.content;
+    const choice = data.choices?.[0];
+    const content = choice?.message?.content;
 
+    if (choice?.finish_reason === 'length') {
+      throw new Error(`AI response was cut off (token limit reached on ${data.model ?? model.id})`);
+    }
     if (!content || content.trim().length === 0) {
       throw new Error('Empty response from AI model');
     }

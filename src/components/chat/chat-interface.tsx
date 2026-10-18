@@ -25,6 +25,7 @@ import {
   Copy,
   Check,
   Menu,
+  Brain,
   BookOpen,
   Zap,
   Download,
@@ -222,6 +223,7 @@ function readFileAsDataUrl(file: File): Promise<string> {
 type ModelOption = { id: string; name: string; provider: string; supportsVision: boolean };
 
 const DEFAULT_MODEL_ID = "openrouter/auto";
+const THINKING_STORAGE_KEY = "bytereaper:thinking";
 const FALLBACK_MODELS: ModelOption[] = [
   { id: DEFAULT_MODEL_ID, name: "Auto (Best Available)", provider: "OpenRouter", supportsVision: true },
 ];
@@ -876,6 +878,28 @@ export function ChatInterface() {
   const [isLoading, setIsLoading] = useState(false);
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL_ID);
+  // Extended thinking: on by default; the choice is remembered per browser
+  const [thinkingEnabled, setThinkingEnabled] = useState(true);
+
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(THINKING_STORAGE_KEY) === "off") setThinkingEnabled(false);
+    } catch {
+      // Storage blocked (private mode etc.): keep the default
+    }
+  }, []);
+
+  const toggleThinking = () => {
+    setThinkingEnabled((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(THINKING_STORAGE_KEY, next ? "on" : "off");
+      } catch {
+        // Not persisted, but the toggle still works for this page
+      }
+      return next;
+    });
+  };
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [isMessagesLoading, setIsMessagesLoading] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
@@ -1822,12 +1846,12 @@ export function ChatInterface() {
           attachments: attachmentsForModel,
           history: historyPayload,
           model: selectedModel,
-          // Thinking is always on and the server searches the web whenever a message needs it,
-          // the way ChatGPT and Claude behave. Slash commands can still force a search or translation.
+          // The server searches the web whenever a message needs it (like ChatGPT and Claude);
+          // thinking follows the brain toggle. Slash commands can still force a search or translation.
           features: {
             webSearch: slashResolved.useWebSearch,
             autoSearch: true,
-            thinking: true,
+            thinking: thinkingEnabled,
             translate: slashResolved.translateTarget,
           },
         }),
@@ -2548,6 +2572,22 @@ export function ChatInterface() {
               <div className="flex items-center justify-between px-4 pb-2.5 pt-0">
                 <div className="flex items-center gap-2">
                   <ModelSelector selectedModel={selectedModel} onSelect={setSelectedModel} disabled={isLoading} />
+                  <button
+                    type="button"
+                    onClick={() => toggleThinking()}
+                    disabled={isLoading}
+                    aria-pressed={thinkingEnabled}
+                    aria-label={thinkingEnabled ? "Thinking on" : "Thinking off"}
+                    title={thinkingEnabled ? "Thinking on: better answers, slower replies" : "Thinking off: faster replies"}
+                    className={cn(
+                      "p-1.5 rounded-lg border transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed",
+                      thinkingEnabled
+                        ? "text-primary bg-primary/10 border-primary/30 hover:bg-primary/15"
+                        : "text-muted-foreground border-border/60 bg-background/60 hover:bg-accent/60 hover:text-foreground"
+                    )}
+                  >
+                    <Brain className="h-3.5 w-3.5" />
+                  </button>
                 </div>
 
                 <div className="flex items-center gap-2">

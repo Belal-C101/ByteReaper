@@ -651,6 +651,8 @@ export async function* streamAgentMessage(
   let attemptCount = 0;
   const maxAttempts = candidateModelIds.length;
   let hasContent = false;
+  // Thinking toggled off in the UI: ask reasoning models to answer directly (much faster)
+  let disableReasoning = features.thinking === false;
 
   while (attemptCount < maxAttempts) {
     try {
@@ -671,13 +673,21 @@ export async function* streamAgentMessage(
           temperature: features.studyMode ? 0.5 : 0.7,
           max_tokens: 8192,
           stream: true,
+          ...(disableReasoning ? { reasoning: { enabled: false } } : {}),
         }),
       });
 
       if (!response.ok) {
         const errorBody = await response.text();
+
+        // Some models can't turn reasoning off ("Reasoning is mandatory"); retry with it on
+        if (disableReasoning && response.status === 400 && /reasoning/i.test(errorBody)) {
+          disableReasoning = false;
+          continue;
+        }
+
         console.error(`[ByteReaper] API Error ${response.status} with model ${currentModelId}:`, errorBody);
-        
+
         // Try fallback model for vision tasks
         if (attemptCount < maxAttempts - 1) {
           attemptCount++;

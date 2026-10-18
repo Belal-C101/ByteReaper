@@ -43,7 +43,7 @@ export default function SharedChatPage() {
   }, [shareId]);
 
   return (
-    <section className="min-h-[calc(100vh-8rem)] py-8">
+    <section className="min-h-[calc(100vh-3.5rem)] py-8">
       <div className="container px-4 mx-auto max-w-4xl space-y-5">
         <div className="flex items-center justify-between gap-3">
           <h1 className="text-2xl md:text-3xl font-semibold">Shared Chat</h1>

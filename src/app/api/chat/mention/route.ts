@@ -54,6 +54,7 @@ export async function POST(req: NextRequest) {
         { role: "system", content: systemPrompt },
         { role: "user", content: prompt },
       ],
+      undefined,
       model
     );
 

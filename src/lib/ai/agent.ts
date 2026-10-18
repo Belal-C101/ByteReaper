@@ -3,7 +3,7 @@ import 'server-only';
 import mammoth from 'mammoth';
 import { searchWeb } from '@/lib/search/duckduckgo';
 import { ChatMessage, FileAttachment, SearchResult } from '@/types/chat';
-import { AI_MODELS, ModelKey, DEFAULT_MODEL } from './gemini';
+import { DEFAULT_MODEL_ID, getVisionModelIds, resolveModel } from './models';
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
@@ -12,8 +12,12 @@ const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 // under the hosting platform's 4.5MB limit. They are rehydrated into data URLs here so the
 // document parsers and vision payloads below work unchanged.
 
+const MAX_ATTACHMENTS_PER_MESSAGE = 5;
 const MAX_REMOTE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const MAX_TOTAL_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const REMOTE_ATTACHMENT_TIMEOUT_MS = 20_000;
+
+type HydratedAttachment = FileAttachment & { loadError?: string };
 
 function isTrustedAttachmentUrl(rawUrl: string): boolean {
   try {
@@ -27,35 +31,87 @@ function isTrustedAttachmentUrl(rawUrl: string): boolean {
   }
 }
 
-async function hydrateRemoteAttachment(attachment: FileAttachment): Promise<FileAttachment> {
+// Reads the body incrementally so an oversized or chunked response is aborted at the
+// limit instead of being buffered whole.
+async function readBodyWithLimit(response: Response, maxBytes: number): Promise<Buffer> {
+  if (Number(response.headers.get('content-length') || 0) > maxBytes) {
+    throw new Error(`Attachment exceeds ${Math.round(maxBytes / 1024 / 1024)}MB`);
+  }
+  if (!response.body) throw new Error('Empty response body');
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > maxBytes) {
+      await reader.cancel();
+      throw new Error(`Attachment exceeds ${Math.round(maxBytes / 1024 / 1024)}MB`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
+
+async function hydrateRemoteAttachment(attachment: FileAttachment, maxBytes: number): Promise<HydratedAttachment> {
   if (attachment.content || !attachment.cloudinaryUrl) return attachment;
   if (!isTrustedAttachmentUrl(attachment.cloudinaryUrl)) {
     console.warn(`[ByteReaper] Ignoring untrusted attachment URL for "${attachment.name}"`);
-    return attachment;
+    return { ...attachment, loadError: 'untrusted file location' };
   }
 
   try {
     const response = await fetch(attachment.cloudinaryUrl, {
       signal: AbortSignal.timeout(REMOTE_ATTACHMENT_TIMEOUT_MS),
+      redirect: 'error',
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    if (Number(response.headers.get('content-length') || 0) > MAX_REMOTE_ATTACHMENT_BYTES) {
-      throw new Error('Attachment exceeds 20MB');
-    }
 
-    const buffer = Buffer.from(await response.arrayBuffer());
-    if (buffer.length > MAX_REMOTE_ATTACHMENT_BYTES) throw new Error('Attachment exceeds 20MB');
-
+    const buffer = await readBodyWithLimit(response, maxBytes);
     const mimeType = attachment.type || response.headers.get('content-type') || 'application/octet-stream';
     return { ...attachment, content: `data:${mimeType};base64,${buffer.toString('base64')}` };
   } catch (error) {
     console.error(`[ByteReaper] Could not fetch attachment "${attachment.name}":`, error);
-    return attachment;
+    return { ...attachment, loadError: error instanceof Error ? error.message : 'download failed' };
   }
 }
 
-function hydrateRemoteAttachments(attachments: FileAttachment[]): Promise<FileAttachment[]> {
-  return Promise.all(attachments.map(hydrateRemoteAttachment));
+// Sequential on purpose: keeps peak memory to one download plus the running total.
+async function hydrateRemoteAttachments(attachments: FileAttachment[]): Promise<HydratedAttachment[]> {
+  const hydrated: HydratedAttachment[] = [];
+  let remainingBytes = MAX_TOTAL_ATTACHMENT_BYTES;
+
+  for (const [index, attachment] of attachments.entries()) {
+    if (index >= MAX_ATTACHMENTS_PER_MESSAGE) {
+      hydrated.push({ ...attachment, content: undefined, loadError: `only the first ${MAX_ATTACHMENTS_PER_MESSAGE} files in a message are read` });
+      continue;
+    }
+    const needsDownload = !attachment.content && !!attachment.cloudinaryUrl;
+    if (needsDownload && remainingBytes <= 0) {
+      hydrated.push({ ...attachment, loadError: `the ${MAX_TOTAL_ATTACHMENT_BYTES / 1024 / 1024}MB total size limit for one message was reached` });
+      continue;
+    }
+
+    const result = await hydrateRemoteAttachment(attachment, Math.min(MAX_REMOTE_ATTACHMENT_BYTES, remainingBytes));
+    if (result.content && result !== attachment) {
+      // base64 inflates by 4/3; count the decoded size against the budget
+      remainingBytes -= Math.floor((result.content.length - result.content.indexOf(',') - 1) * 0.75);
+    }
+    hydrated.push(result);
+  }
+  return hydrated;
+}
+
+function isImageAttachment(a: FileAttachment): boolean {
+  const ext = a.name.split('.').pop()?.toLowerCase() || '';
+  return a.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
+}
+
+// Only images whose bytes actually arrived can be sent to a vision model.
+function hasLoadedImage(attachments: HydratedAttachment[]): boolean {
+  return attachments.some((a) => isImageAttachment(a) && !!a.content?.startsWith('data:image/'));
 }
 
 // ─── Feature Flags ───────────────────────────────────────
@@ -67,6 +123,7 @@ export interface ChatFeatures {
   summarize?: boolean;
   translate?: string; // target language, e.g. 'Arabic', 'Spanish'
   codeReview?: boolean;
+  autoSearch?: boolean; // search the web on its own when a message looks like a lookup question
 }
 
 // ─── System Prompts ──────────────────────────────────────
@@ -152,16 +209,14 @@ export interface AgentResponse {
 export const STREAM_MODEL_META_PREFIX = '__BYTEREAPER_MODEL__:';
 
 async function callOpenRouter(
-  messages: { role: string; content: string }[], 
-  modelKey: ModelKey = DEFAULT_MODEL,
+  messages: { role: string; content: string }[],
+  modelId: string,
   stream = false
 ) {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     throw new Error('OPENROUTER_API_KEY not configured');
   }
-
-  const model = AI_MODELS[modelKey];
 
   const response = await fetch(OPENROUTER_API_URL, {
     method: 'POST',
@@ -172,7 +227,7 @@ async function callOpenRouter(
       'X-Title': 'ByteReaper',
     },
     body: JSON.stringify({
-      model: model.id,
+      model: modelId,
       messages,
       temperature: 0.7,
       max_tokens: 8192,
@@ -192,13 +247,13 @@ export async function processAgentMessage(
   userMessage: string,
   attachments: FileAttachment[] = [],
   conversationHistory: ChatMessage[] = [],
-  modelKey: ModelKey = DEFAULT_MODEL,
+  modelId: string = DEFAULT_MODEL_ID,
   features: ChatFeatures = {}
 ): Promise<AgentResponse> {
-  attachments = await hydrateRemoteAttachments(attachments);
+  const hydratedAttachments = await hydrateRemoteAttachments(attachments);
 
   // Detect if user wants to search the web
-  const searchIntent = features.webSearch ? userMessage : detectSearchIntent(userMessage);
+  const searchIntent = resolveSearchQuery(userMessage, attachments.length > 0, features);
   let searchResults: SearchResult[] | undefined;
   let searchContext = '';
 
@@ -220,48 +275,32 @@ export async function processAgentMessage(
     .join('\n\n');
 
   // Build attachment context with proper async document parsing
-  const attachmentContext = await buildAttachmentContextAsync(attachments);
+  const attachmentContext = await buildAttachmentContextAsync(hydratedAttachments);
 
   const userContentString = `Previous conversation:\n${historyContext || '(New conversation)'}\n${attachmentContext}\n${searchContext}\n\nUser: ${userMessage}`;
 
-  let finalUserContent: any = userContentString;
-  const hasImages = attachments.some(a => {
-    const ext = a.name.split('.').pop()?.toLowerCase() || '';
-    return a.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
-  });
-
-  if (hasImages) {
-    const contentArray: any[] = [{ type: 'text', text: userContentString }];
-    for (const a of attachments) {
-      const ext = a.name.split('.').pop()?.toLowerCase() || '';
-      const isImage = a.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
-      if (isImage && a.content?.startsWith('data:image/')) {
-        contentArray.push({
-          type: 'image_url',
-          image_url: { url: a.content }
-        });
-      }
-    }
-    finalUserContent = contentArray;
-  }
+  const hasImages = hasLoadedImage(hydratedAttachments);
+  const finalUserContent: any = hasImages
+    ? buildMultimodalContent(userContentString, hydratedAttachments)
+    : userContentString;
 
   // Build system prompt based on features
   const systemPrompt = buildSystemPrompt(features);
 
   // If using an image, we MUST use a vision-capable model
-  let activeModelKey = modelKey;
-  const selectedModel = AI_MODELS[modelKey];
-  if (hasImages && !selectedModel?.supportsVision) {
-    // Switch to a vision-capable model
-    activeModelKey = 'gemini-flash';
-    console.log(`[ByteReaper] Vision required: Switching from ${modelKey} to ${activeModelKey}`);
+  const selectedModel = await resolveModel(modelId);
+  const activeModelId = hasImages
+    ? (await getVisionModelIds(selectedModel.id))[0]
+    : selectedModel.id;
+  if (activeModelId !== selectedModel.id) {
+    console.log(`[ByteReaper] Vision required: Switching from ${selectedModel.id} to ${activeModelId}`);
   }
 
   try {
     const response = await callOpenRouter([
       { role: 'system', content: systemPrompt },
       { role: 'user', content: finalUserContent },
-    ], activeModelKey);
+    ], activeModelId);
 
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content || '';
@@ -303,11 +342,25 @@ function buildSystemPrompt(features: ChatFeatures): string {
   return base;
 }
 
-// Async function to build attachment context with proper document parsing
-async function buildAttachmentContextAsync(attachments: FileAttachment[]): Promise<string> {
+function buildMultimodalContent(text: string, attachments: HydratedAttachment[]): any[] {
+  const contentArray: any[] = [{ type: 'text', text }];
+  for (const a of attachments) {
+    if (isImageAttachment(a) && a.content?.startsWith('data:image/')) {
+      contentArray.push({ type: 'image_url', image_url: { url: a.content } });
+    }
+  }
+  return contentArray;
+}
+
+// Async function to build attachment context with proper async document parsing
+async function buildAttachmentContextAsync(attachments: HydratedAttachment[]): Promise<string> {
   if (attachments.length === 0) return '';
 
   const parts = await Promise.all(attachments.map(async (a) => {
+    if (a.loadError) {
+      return `[Attachment "${a.name}" could not be loaded (${a.loadError}). You have NOT seen its contents. Tell the user it could not be read and ask them to upload it again; do not guess what it contains.]`;
+    }
+
     const fileExt = a.name.split('.').pop()?.toLowerCase() || '';
     const isImage = a.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(fileExt);
     const isHTML = fileExt === 'html' || fileExt === 'htm' || a.type === 'text/html';
@@ -481,6 +534,27 @@ function extractTextFromBase64(dataUrl: string): string {
   }
 }
 
+const CONVERSATIONAL_PATTERN = /^(hi|hello|hey|yo|thanks|thank you|thx|ok|okay|cool|nice|great|yes|no|sure)\b/i;
+const QUESTION_START_PATTERN = /^(what|who|whom|whose|when|where|which|why|how|is|are|was|were|does|do|did|can|could|should|will|would|has|have|compare|explain|tell me about|difference between|best)\b/i;
+const TASK_START_PATTERN = /^(write|create|make|build|generate|fix|debug|refactor|convert|implement|rewrite|translate|optimi[sz]e|review|add|remove|update)\b/i;
+
+// Mirrors how ChatGPT/Claude decide: short questions get a web search for fresh context;
+// instructions ("write…", "fix…"), pasted code, attachments, and small talk do not.
+function shouldAutoSearch(message: string, hasAttachments: boolean): boolean {
+  const text = message.trim();
+  if (hasAttachments || text.length < 8 || text.length > 300) return false;
+  if (text.includes('```') || /[{};]\s*$/m.test(text)) return false;
+  if (CONVERSATIONAL_PATTERN.test(text) || TASK_START_PATTERN.test(text)) return false;
+  return text.endsWith('?') || QUESTION_START_PATTERN.test(text);
+}
+
+function resolveSearchQuery(message: string, hasAttachments: boolean, features: ChatFeatures): string | null {
+  if (features.webSearch) return message;
+  const explicitQuery = detectSearchIntent(message);
+  if (explicitQuery) return explicitQuery;
+  return features.autoSearch && shouldAutoSearch(message, hasAttachments) ? message : null;
+}
+
 function detectSearchIntent(message: string): string | null {
   const searchPatterns = [
     /search(?:\s+(?:for|the\s+web|online))?\s+(?:for\s+)?["""]?(.+?)["""]?$/i,
@@ -517,7 +591,7 @@ export async function* streamAgentMessage(
   userMessage: string,
   attachments: FileAttachment[] = [],
   conversationHistory: ChatMessage[] = [],
-  modelKey: ModelKey = DEFAULT_MODEL,
+  modelId: string = DEFAULT_MODEL_ID,
   features: ChatFeatures = {}
 ): AsyncGenerator<string, void, unknown> {
   const apiKey = process.env.OPENROUTER_API_KEY;
@@ -526,35 +600,21 @@ export async function* streamAgentMessage(
     return;
   }
 
-  const model = AI_MODELS[modelKey];
-  if (!model) {
-    yield `Error: Unknown model "${modelKey}". Using default model.`;
-    return;
-  }
-
+  const model = await resolveModel(modelId);
   console.log(`[ByteReaper] Using model: ${model.id}`);
 
-  attachments = await hydrateRemoteAttachments(attachments);
+  const hydratedAttachments = await hydrateRemoteAttachments(attachments);
+  const hasImages = hasLoadedImage(hydratedAttachments);
 
-  const hasImages = attachments.some(a => {
-    const ext = a.name.split('.').pop()?.toLowerCase() || '';
-    return a.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
-  });
-
-  // Determine the correct model to use
-  let activeModelId = model.id;
-  let activeModelKey = modelKey;
-  
-  // If using images and current model doesn't support vision, switch to gemini-flash
-  if (hasImages && !model.supportsVision) {
-    activeModelKey = 'gemini-flash';
-    activeModelId = AI_MODELS['gemini-flash'].id;
-    console.log(`[ByteReaper] Vision required: Switching to ${activeModelId}`);
+  // Images need a vision-capable model; try the candidates in order until one answers.
+  const candidateModelIds = hasImages ? await getVisionModelIds(model.id) : [model.id];
+  if (candidateModelIds[0] !== model.id) {
+    console.log(`[ByteReaper] Vision required: Switching to ${candidateModelIds[0]}`);
   }
 
   // ── Search (if web search enabled or intent detected) ──
   let searchContext = '';
-  const searchIntent = features.webSearch ? userMessage : detectSearchIntent(userMessage);
+  const searchIntent = resolveSearchQuery(userMessage, attachments.length > 0, features);
   if (searchIntent) {
     try {
       const searchQuery = features.webSearch ? userMessage : searchIntent;
@@ -576,35 +636,21 @@ export async function* streamAgentMessage(
     .join('\n\n');
 
   // Use async document parsing for proper DOCX support
-  const attachmentContext = await buildAttachmentContextAsync(attachments);
+  const attachmentContext = await buildAttachmentContextAsync(hydratedAttachments);
 
   const userContentString = `Previous conversation:\n${historyContext || '(New conversation)'}\n${attachmentContext}\n${searchContext}\n\nUser: ${userMessage}`;
 
-  let finalUserContent: any = userContentString;
-
-  if (hasImages) {
-    const contentArray: any[] = [{ type: 'text', text: userContentString }];
-    for (const a of attachments) {
-      const ext = a.name.split('.').pop()?.toLowerCase() || '';
-      const isImage = a.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
-      if (isImage && a.content?.startsWith('data:image/')) {
-        contentArray.push({
-          type: 'image_url',
-          image_url: { url: a.content }
-        });
-      }
-    }
-    finalUserContent = contentArray;
-  }
+  const finalUserContent: any = hasImages
+    ? buildMultimodalContent(userContentString, hydratedAttachments)
+    : userContentString;
 
   // Build system prompt based on features
   const systemPrompt = buildSystemPrompt(features);
 
-  // List of fallback models for vision tasks
-  const visionFallbacks = ['gemini-flash', 'gemini-flash-lite', 'auto'];
-  let currentModelId = activeModelId;
+  let currentModelId = candidateModelIds[0];
   let attemptCount = 0;
-  const maxAttempts = hasImages ? visionFallbacks.length : 1;
+  const maxAttempts = candidateModelIds.length;
+  let hasContent = false;
 
   while (attemptCount < maxAttempts) {
     try {
@@ -633,10 +679,9 @@ export async function* streamAgentMessage(
         console.error(`[ByteReaper] API Error ${response.status} with model ${currentModelId}:`, errorBody);
         
         // Try fallback model for vision tasks
-        if (hasImages && attemptCount < maxAttempts - 1) {
+        if (attemptCount < maxAttempts - 1) {
           attemptCount++;
-          const fallbackKey = visionFallbacks[attemptCount] as ModelKey;
-          currentModelId = AI_MODELS[fallbackKey]?.id || currentModelId;
+          currentModelId = candidateModelIds[attemptCount];
           console.log(`[ByteReaper] Retrying with fallback model: ${currentModelId}`);
           continue;
         }
@@ -660,64 +705,77 @@ export async function* streamAgentMessage(
         return;
       }
 
-      let hasContent = false;
+      // SSE events can be split across network chunks; keep the unfinished tail for the next read
+      let pending = '';
+      let streamError: string | null = null;
 
-      while (true) {
+      readLoop: while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n');
+        pending += decoder.decode(value, { stream: !done });
+        const lines = pending.split('\n');
+        pending = done ? '' : lines.pop() ?? '';
 
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6);
-            if (data === '[DONE]') continue;
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6).trim();
+          if (data === '[DONE]') continue;
 
-            try {
-              const parsed = JSON.parse(data);
-              if (typeof parsed.model === 'string' && parsed.model.trim() && parsed.model !== resolvedModelId) {
-                resolvedModelId = parsed.model;
-                yield `${STREAM_MODEL_META_PREFIX}${resolvedModelId}`;
-              }
+          let parsed: any;
+          try {
+            parsed = JSON.parse(data);
+          } catch {
+            continue;
+          }
 
-              const content = parsed.choices?.[0]?.delta?.content;
-              if (content) {
-                hasContent = true;
-                yield content;
-              }
-              // Check for errors in the response
-              if (parsed.error) {
-                console.error('[ByteReaper] Stream error:', parsed.error);
-                yield `\n\nError: ${parsed.error.message || 'Unknown error'}`;
-              }
-            } catch {
-              // Skip parse errors for incomplete JSON chunks
-            }
+          if (typeof parsed.model === 'string' && parsed.model.trim() && parsed.model !== resolvedModelId) {
+            resolvedModelId = parsed.model;
+            yield `${STREAM_MODEL_META_PREFIX}${resolvedModelId}`;
+          }
+
+          const content = parsed.choices?.[0]?.delta?.content;
+          if (content) {
+            hasContent = true;
+            yield content;
+          }
+
+          if (parsed.error) {
+            console.error(`[ByteReaper] Stream error from ${resolvedModelId}:`, parsed.error);
+            streamError = parsed.error.message || 'Unknown error';
+            await reader.cancel().catch(() => {});
+            break readLoop;
           }
         }
+
+        if (done) break;
       }
 
-      if (!hasContent) {
+      // Free providers usually fail inside a 200 stream; move on if nothing was shown yet
+      if (streamError && !hasContent && attemptCount < maxAttempts - 1) {
+        attemptCount++;
+        currentModelId = candidateModelIds[attemptCount];
+        console.log(`[ByteReaper] Retrying with fallback model: ${currentModelId}`);
+        continue;
+      }
+
+      if (streamError) {
+        yield `\n\nError: ${streamError}`;
+      } else if (!hasContent) {
         yield "I apologize, but I couldn't generate a response. Please try again or select a different model.";
       }
-      
-      // Success - exit the retry loop
       return;
-      
+
     } catch (error: any) {
       console.error('[ByteReaper] Stream error:', error);
-      
-      // Try fallback model for vision tasks
-      if (hasImages && attemptCount < maxAttempts - 1) {
+
+      // Only fall back before any text reached the user, otherwise the answers would be merged
+      if (!hasContent && attemptCount < maxAttempts - 1) {
         attemptCount++;
-        const fallbackKey = visionFallbacks[attemptCount] as ModelKey;
-        currentModelId = AI_MODELS[fallbackKey]?.id || currentModelId;
+        currentModelId = candidateModelIds[attemptCount];
         console.log(`[ByteReaper] Retrying after error with fallback model: ${currentModelId}`);
         continue;
       }
-      
-      yield `Error: ${error.message || 'Failed to connect to AI service'}`;
+
+      yield `${hasContent ? '\n\n' : ''}Error: ${error.message || 'Failed to connect to AI service'}`;
       return;
     }
   }

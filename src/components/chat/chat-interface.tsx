@@ -25,13 +25,8 @@ import {
   Copy,
   Check,
   Menu,
-  Globe,
-  Brain,
-  GraduationCap,
   BookOpen,
   Zap,
-  Languages,
-  Code2,
   Download,
   ExternalLink,
   Eye,
@@ -223,17 +218,35 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-const AI_MODELS = {
-  auto: { name: "Auto (Best Available)", description: "🎲 Auto-select", provider: "OpenRouter" },
-  "gemini-flash": { name: "Gemini 2.5 Flash", description: "👁️ Vision + Fast", provider: "Google" },
-  "gemini-flash-lite": { name: "Gemini 2.5 Flash Lite", description: "⚡ Fast + Vision", provider: "Google" },
-  nemotron: { name: "Nemotron 3 Super 120B", description: "🚀 Powerful", provider: "NVIDIA" },
-  "qwen-plus": { name: "Qwen 3.6 Plus", description: "🧠 Reasoning", provider: "Qwen" },
-  minimax: { name: "MiniMax M2.5", description: "⚡ Fast", provider: "MiniMax" },
-  liquid: { name: "LFM 2.5 Instruct", description: "📝 Instruct", provider: "LiquidAI" },
-} as const;
+// The model list comes from /api/models (OpenRouter's free models, newest first).
+type ModelOption = { id: string; name: string; provider: string; supportsVision: boolean };
 
-type ModelKey = keyof typeof AI_MODELS;
+const DEFAULT_MODEL_ID = "openrouter/auto";
+const FALLBACK_MODELS: ModelOption[] = [
+  { id: DEFAULT_MODEL_ID, name: "Auto (Best Available)", provider: "OpenRouter", supportsVision: true },
+];
+
+// Shared across selector mounts so the catalog is fetched once per page load
+let modelCatalogRequest: Promise<ModelOption[]> | null = null;
+
+function loadModelCatalog(): Promise<ModelOption[]> {
+  if (!modelCatalogRequest) {
+    modelCatalogRequest = fetch("/api/models")
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
+      .then((data: { models?: ModelOption[] }) => {
+        const models = data.models?.length ? data.models : FALLBACK_MODELS;
+        // Only the auto routers means the server couldn't reach OpenRouter; try again on next open
+        if (!models.some((m) => !m.id.startsWith("openrouter/"))) modelCatalogRequest = null;
+        return models;
+      })
+      .catch((error) => {
+        console.error("Failed to load model list:", error);
+        modelCatalogRequest = null; // allow a retry on the next open
+        return FALLBACK_MODELS;
+      });
+  }
+  return modelCatalogRequest;
+}
 type FileLike = { name: string; type?: string | null };
 
 const EXTENSION_MIME_MAP: Record<string, string> = {
@@ -737,18 +750,51 @@ function ModelSelector({
   onSelect,
   disabled,
 }: {
-  selectedModel: ModelKey;
-  onSelect: (model: ModelKey) => void;
+  selectedModel: string;
+  onSelect: (modelId: string) => void;
   disabled?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const model = AI_MODELS[selectedModel];
+  const [models, setModels] = useState<ModelOption[]>(FALLBACK_MODELS);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const model = models.find((m) => m.id === selectedModel) ?? FALLBACK_MODELS[0];
+
+  useEffect(() => {
+    if (!isOpen && models.length > FALLBACK_MODELS.length) return;
+    let active = true;
+    loadModelCatalog().then((catalog) => {
+      if (active) setModels(catalog);
+    });
+    return () => {
+      active = false;
+    };
+  }, [isOpen, models.length]);
+
+  // Close on any click/tap outside the selector, or on Escape
+  useEffect(() => {
+    if (!isOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) setIsOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsOpen(false);
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen]);
 
   return (
-    <div className="relative">
+    <div ref={containerRef} className="relative">
       <button
+        type="button"
         onClick={() => setIsOpen(!isOpen)}
         disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
         className={cn(
           "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs",
           "border border-border/60 bg-background/60 hover:bg-accent/60",
@@ -756,42 +802,41 @@ function ModelSelector({
           disabled && "opacity-50 cursor-not-allowed"
         )}
       >
-        <Sparkles className="h-3 w-3 text-primary" />
-        <span className="text-muted-foreground">{model.description}</span>
-        <span className="font-medium text-foreground hidden sm:inline">{model.name}</span>
-        <ChevronDown className={cn("h-3 w-3 text-muted-foreground transition-transform duration-200", isOpen && "rotate-180")} />
+        <Sparkles className="h-3 w-3 shrink-0 text-primary" />
+        <span className="max-w-[10rem] sm:max-w-[16rem] truncate font-medium text-foreground">{model.name}</span>
+        <ChevronDown className={cn("h-3 w-3 shrink-0 text-muted-foreground transition-transform duration-200", isOpen && "rotate-180")} />
       </button>
 
       <AnimatePresence>
         {isOpen && (
-          <>
-            <div className="fixed inset-0 z-10" onClick={() => setIsOpen(false)} />
-            <motion.div
-              initial={{ opacity: 0, y: 4, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 4, scale: 0.98 }}
-              transition={{ duration: 0.15 }}
-              className="absolute bottom-full left-0 mb-2 w-72 bg-popover/95 backdrop-blur-xl border border-border/60 rounded-xl shadow-xl z-20 py-1.5 overflow-hidden"
-            >
-              {(Object.entries(AI_MODELS) as [ModelKey, (typeof AI_MODELS)[ModelKey]][]).map(([key, m]) => (
+          <motion.div
+            initial={{ opacity: 0, y: 4, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 4, scale: 0.98 }}
+            transition={{ duration: 0.15 }}
+            className="absolute bottom-full left-0 mb-2 w-80 max-w-[calc(100vw-2rem)] bg-popover/95 backdrop-blur-xl border border-border/60 rounded-xl shadow-xl z-20 overflow-hidden"
+          >
+            {/* Native overflow scrolling keeps the mouse wheel at normal speed */}
+            <div role="listbox" aria-label="AI model" className="max-h-80 overflow-y-auto overscroll-contain py-1.5">
+              {models.map((m) => (
                 <button
-                  key={key}
-                  onClick={() => { onSelect(key); setIsOpen(false); }}
+                  key={m.id}
+                  type="button"
+                  role="option"
+                  aria-selected={m.id === selectedModel}
+                  onClick={() => { onSelect(m.id); setIsOpen(false); }}
                   className={cn(
-                    "w-full px-3.5 py-2.5 text-left flex items-center justify-between",
+                    "w-full px-3.5 py-2.5 text-left",
                     "hover:bg-accent/60 transition-colors duration-150",
-                    key === selectedModel && "bg-primary/[0.06]"
+                    m.id === selectedModel && "bg-primary/[0.06]"
                   )}
                 >
-                  <div>
-                    <div className="text-sm font-medium">{m.name}</div>
-                    <div className="text-xs text-muted-foreground/70">{m.provider}</div>
-                  </div>
-                  <span className="text-sm">{m.description}</span>
+                  <div className="text-sm font-medium truncate">{m.name}</div>
+                  <div className="text-xs text-muted-foreground/70 truncate">{m.provider}</div>
                 </button>
               ))}
-            </motion.div>
-          </>
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
 
@@ -830,21 +875,13 @@ export function ChatInterface() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
-  const [selectedModel, setSelectedModel] = useState<ModelKey>("auto");
+  const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL_ID);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [isMessagesLoading, setIsMessagesLoading] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
   const [composerFocused, setComposerFocused] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  const [featuresMenuOpen, setFeaturesMenuOpen] = useState(false);
-  const [featureWebSearch, setFeatureWebSearch] = useState(false);
-  const [featureThinking, setFeatureThinking] = useState(false);
-  const [featureStudyMode, setFeatureStudyMode] = useState(false);
-  const [featureSummarize, setFeatureSummarize] = useState(false);
-  const [featureTranslate, setFeatureTranslate] = useState(false);
-  const [featureTranslateLanguage, setFeatureTranslateLanguage] = useState("Arabic");
-  const [featureCodeReview, setFeatureCodeReview] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgressPct, setUploadProgressPct] = useState(0);
@@ -864,7 +901,6 @@ export function ChatInterface() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const featuresMenuRef = useRef<HTMLDivElement>(null);
   const promptMenuRef = useRef<HTMLDivElement>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1055,25 +1091,6 @@ export function ChatInterface() {
       textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
     }
   }, [input]);
-
-  useEffect(() => {
-    if (!featuresMenuOpen) return;
-
-    const handleOutsidePointer = (event: MouseEvent | TouchEvent) => {
-      const target = event.target as Node | null;
-      if (!target) return;
-      if (featuresMenuRef.current?.contains(target)) return;
-      setFeaturesMenuOpen(false);
-    };
-
-    document.addEventListener("mousedown", handleOutsidePointer);
-    document.addEventListener("touchstart", handleOutsidePointer);
-
-    return () => {
-      document.removeEventListener("mousedown", handleOutsidePointer);
-      document.removeEventListener("touchstart", handleOutsidePointer);
-    };
-  }, [featuresMenuOpen]);
 
   useEffect(() => {
     if (!promptMenuOpen && !exportMenuOpen) return;
@@ -1805,13 +1822,13 @@ export function ChatInterface() {
           attachments: attachmentsForModel,
           history: historyPayload,
           model: selectedModel,
+          // Thinking is always on and the server searches the web whenever a message needs it,
+          // the way ChatGPT and Claude behave. Slash commands can still force a search or translation.
           features: {
-            webSearch: featureWebSearch || slashResolved.useWebSearch,
-            thinking: featureThinking,
-            studyMode: featureStudyMode,
-            summarize: featureSummarize,
-            translate: slashResolved.translateTarget || (featureTranslate ? featureTranslateLanguage : undefined),
-            codeReview: featureCodeReview,
+            webSearch: slashResolved.useWebSearch,
+            autoSearch: true,
+            thinking: true,
+            translate: slashResolved.translateTarget,
           },
         }),
       });
@@ -1823,27 +1840,34 @@ export function ChatInterface() {
       let fullContent = "";
 
       if (reader) {
+        // Events can be split across network chunks; keep the unfinished tail for the next read
+        let pending = "";
         while (true) {
           const { done, value } = await reader.read();
-          if (done) break;
-          const chunk = decoder.decode(value);
-          const lines = chunk.split("\n");
+          pending += decoder.decode(value, { stream: !done });
+          const lines = pending.split("\n");
+          pending = done ? "" : lines.pop() ?? "";
           for (const line of lines) {
             if (!line.startsWith("data: ")) continue;
-            const data = line.slice(6);
+            const data = line.slice(6).trim();
             if (data === "[DONE]") continue;
+            let parsed: { model?: unknown; text?: string; error?: string };
             try {
-              const parsed = JSON.parse(data);
-              if (typeof parsed.model === "string" && parsed.model.trim()) {
-                modelUsedForExchange = parsed.model;
-              } else if (parsed.text) {
-                fullContent += parsed.text;
-                setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: fullContent } : m));
-              } else if (parsed.error) {
-                throw new Error(parsed.error);
-              }
-            } catch { /* skip incomplete chunks */ }
+              parsed = JSON.parse(data);
+            } catch {
+              continue;
+            }
+            if (typeof parsed.model === "string" && parsed.model.trim()) {
+              modelUsedForExchange = parsed.model;
+            } else if (parsed.text) {
+              fullContent += parsed.text;
+              setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: fullContent } : m));
+            } else if (parsed.error) {
+              // Outside the JSON try so the server's error reaches the user
+              throw new Error(parsed.error);
+            }
           }
+          if (done) break;
         }
       }
 
@@ -2155,7 +2179,7 @@ export function ChatInterface() {
 
   return (
     <div
-      className="relative flex h-[calc(100vh-7rem)] w-full overflow-hidden bg-background"
+      className="relative flex h-[calc(100vh-3.5rem)] w-full overflow-hidden bg-background"
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={(e) => e.preventDefault()}
@@ -2401,123 +2425,6 @@ export function ChatInterface() {
                   }}
                 />
 
-                <div ref={featuresMenuRef} className="relative">
-                  <button
-                    onClick={() => setFeaturesMenuOpen(!featuresMenuOpen)}
-                    disabled={isLoading}
-                    className={cn(
-                      "p-2 rounded-lg transition-all duration-150 disabled:opacity-40",
-                      featuresMenuOpen || featureWebSearch || featureThinking || featureStudyMode || featureSummarize || featureTranslate || featureCodeReview
-                        ? "text-primary bg-primary/10"
-                        : "text-muted-foreground/60 hover:text-foreground hover:bg-accent/50"
-                    )}
-                    title="AI Features"
-                  >
-                    <Plus className="h-4.5 w-4.5" />
-                  </button>
-
-                  <AnimatePresence>
-                    {featuresMenuOpen && (
-                      <motion.div
-                        initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                        animate={{ opacity: 1, scale: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                        transition={{ duration: 0.15 }}
-                        className="absolute bottom-full left-0 mb-2 w-[240px] z-50 rounded-xl border border-border/50 bg-popover p-1 shadow-xl outline-none"
-                      >
-                          <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                            AI Abilities
-                          </div>
-                          
-                          <button
-                            onClick={() => setFeatureWebSearch(!featureWebSearch)}
-                            className="w-full flex items-center justify-between gap-2 px-2 py-2 rounded-md hover:bg-accent hover:text-accent-foreground text-sm transition-colors text-left"
-                          >
-                            <div className="flex items-center gap-2">
-                              <Globe className={cn("h-4 w-4", featureWebSearch ? "text-blue-500" : "text-muted-foreground")} />
-                              <span className={featureWebSearch ? "font-medium" : ""}>Web Search</span>
-                            </div>
-                            {featureWebSearch && <Check className="h-4 w-4 text-blue-500" />}
-                          </button>
-                          
-                          <button
-                            onClick={() => setFeatureThinking(!featureThinking)}
-                            className="w-full flex items-center justify-between gap-2 px-2 py-2 rounded-md hover:bg-accent hover:text-accent-foreground text-sm transition-colors text-left"
-                          >
-                            <div className="flex items-center gap-2">
-                              <Brain className={cn("h-4 w-4", featureThinking ? "text-purple-500" : "text-muted-foreground")} />
-                              <span className={featureThinking ? "font-medium" : ""}>Extended Thinking</span>
-                            </div>
-                            {featureThinking && <Check className="h-4 w-4 text-purple-500" />}
-                          </button>
-                          
-                          <button
-                            onClick={() => setFeatureStudyMode(!featureStudyMode)}
-                            className="w-full flex items-center justify-between gap-2 px-2 py-2 rounded-md hover:bg-accent hover:text-accent-foreground text-sm transition-colors text-left"
-                          >
-                            <div className="flex items-center gap-2">
-                              <GraduationCap className={cn("h-4 w-4", featureStudyMode ? "text-green-500" : "text-muted-foreground")} />
-                              <span className={featureStudyMode ? "font-medium" : ""}>Study Mode</span>
-                            </div>
-                            {featureStudyMode && <Check className="h-4 w-4 text-green-500" />}
-                          </button>
-
-                          <div className="mx-1.5 my-1 border-t border-border/30" />
-                          <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground/50 uppercase tracking-wider">
-                            Response Modes
-                          </div>
-
-                          <button
-                            onClick={() => setFeatureSummarize(!featureSummarize)}
-                            className="w-full flex items-center justify-between gap-2 px-2 py-2 rounded-md hover:bg-accent hover:text-accent-foreground text-sm transition-colors text-left"
-                          >
-                            <div className="flex items-center gap-2">
-                              <Zap className={cn("h-4 w-4", featureSummarize ? "text-amber-500" : "text-muted-foreground")} />
-                              <span className={featureSummarize ? "font-medium" : ""}>Summarize</span>
-                            </div>
-                            {featureSummarize && <Check className="h-4 w-4 text-amber-500" />}
-                          </button>
-
-                          <button
-                            onClick={() => setFeatureTranslate(!featureTranslate)}
-                            className="w-full flex items-center justify-between gap-2 px-2 py-2 rounded-md hover:bg-accent hover:text-accent-foreground text-sm transition-colors text-left"
-                          >
-                            <div className="flex items-center gap-2">
-                              <Languages className={cn("h-4 w-4", featureTranslate ? "text-cyan-500" : "text-muted-foreground")} />
-                              <span className={featureTranslate ? "font-medium" : ""}>Translate</span>
-                            </div>
-                            {featureTranslate && <Check className="h-4 w-4 text-cyan-500" />}
-                          </button>
-
-                          {featureTranslate && (
-                            <div className="px-2 pb-1">
-                              <select
-                                value={featureTranslateLanguage}
-                                onChange={(e) => setFeatureTranslateLanguage(e.target.value)}
-                                className="w-full text-xs px-2 py-1.5 rounded-md bg-background/80 border border-border/50 text-foreground"
-                              >
-                                {["Arabic", "Spanish", "French", "German", "Chinese", "Japanese", "Korean", "Portuguese", "Russian", "Italian", "Hindi", "Turkish", "Dutch", "Polish"].map((lang) => (
-                                  <option key={lang} value={lang}>{lang}</option>
-                                ))}
-                              </select>
-                            </div>
-                          )}
-
-                          <button
-                            onClick={() => setFeatureCodeReview(!featureCodeReview)}
-                            className="w-full flex items-center justify-between gap-2 px-2 py-2 rounded-md hover:bg-accent hover:text-accent-foreground text-sm transition-colors text-left"
-                          >
-                            <div className="flex items-center gap-2">
-                              <Code2 className={cn("h-4 w-4", featureCodeReview ? "text-rose-500" : "text-muted-foreground")} />
-                              <span className={featureCodeReview ? "font-medium" : ""}>Code Review</span>
-                            </div>
-                            {featureCodeReview && <Check className="h-4 w-4 text-rose-500" />}
-                          </button>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-
                 <div ref={promptMenuRef} className="relative">
                   <button
                     onClick={() => setPromptMenuOpen((prev) => !prev)}
@@ -2583,7 +2490,7 @@ export function ChatInterface() {
                   onPaste={handlePaste}
                   onFocus={() => setComposerFocused(true)}
                   onBlur={() => setComposerFocused(false)}
-                  placeholder={featureStudyMode ? "Ask a question, request a summary, or type 'Quiz me'…" : "Ask me anything, paste an image, or drag files…"}
+                  placeholder="Ask me anything, paste an image, or drag files…"
                   className="flex-1 min-h-[40px] max-h-[200px] resize-none bg-transparent outline-none ring-0 focus:ring-0 focus:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 border-none text-sm md:text-base placeholder:text-muted-foreground/40 py-2.5"
                   disabled={isLoading}
                   rows={1}
@@ -2641,40 +2548,6 @@ export function ChatInterface() {
               <div className="flex items-center justify-between px-4 pb-2.5 pt-0">
                 <div className="flex items-center gap-2">
                   <ModelSelector selectedModel={selectedModel} onSelect={setSelectedModel} disabled={isLoading} />
-                  
-                  {/* Active features indicators */}
-                  <div className="hidden sm:flex items-center gap-1.5 ml-1">
-                    {featureWebSearch && (
-                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-500/10 text-blue-500 border border-blue-500/20">
-                        <Globe className="h-3 w-3" /> Search
-                      </span>
-                    )}
-                    {featureThinking && (
-                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-500/10 text-purple-500 border border-purple-500/20">
-                        <Brain className="h-3 w-3" /> Think
-                      </span>
-                    )}
-                    {featureStudyMode && (
-                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-500/10 text-green-500 border border-green-500/20">
-                        <GraduationCap className="h-3 w-3" /> Study Mode
-                      </span>
-                    )}
-                    {featureSummarize && (
-                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20">
-                        <Zap className="h-3 w-3" /> Summarize
-                      </span>
-                    )}
-                    {featureTranslate && (
-                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-cyan-500/10 text-cyan-500 border border-cyan-500/20">
-                        <Languages className="h-3 w-3" /> {featureTranslateLanguage}
-                      </span>
-                    )}
-                    {featureCodeReview && (
-                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-rose-500/10 text-rose-500 border border-rose-500/20">
-                        <Code2 className="h-3 w-3" /> Review
-                      </span>
-                    )}
-                  </div>
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -2683,7 +2556,6 @@ export function ChatInterface() {
                       <Loader2 className="h-3 w-3 animate-spin" /> Uploading {uploadProgressPct}%
                     </span>
                   )}
-                  <p className="text-[10px] text-muted-foreground/40 hidden sm:block">Shift+Enter for new line</p>
                 </div>
               </div>
             </div>

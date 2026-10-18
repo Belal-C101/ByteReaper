@@ -9,7 +9,7 @@ interface ToolPageShellProps {
 
 export function ToolPageShell({ title, description, children }: ToolPageShellProps) {
   return (
-    <section className="min-h-[calc(100vh-8rem)] py-8">
+    <section className="min-h-[calc(100vh-3.5rem)] py-8">
       <div className="container px-4 mx-auto space-y-6">
         <nav aria-label="Breadcrumb" className="flex items-center gap-1 text-xs text-muted-foreground">
           <Link href="/" className="inline-flex items-center gap-1 hover:text-foreground transition-colors">

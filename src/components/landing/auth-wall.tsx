@@ -76,7 +76,7 @@ export function AuthWall() {
   };
 
   return (
-    <section className="relative min-h-[calc(100vh-7rem)] overflow-hidden flex items-center">
+    <section className="relative min-h-[calc(100vh-3.5rem)] overflow-hidden flex items-center">
       {/* Animated background orbs */}
       <div className="absolute inset-0 -z-10 overflow-hidden">
         <motion.div

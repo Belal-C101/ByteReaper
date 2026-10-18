@@ -39,8 +39,16 @@ export async function POST(request: NextRequest) {
     // Perform analysis
     const result = await analyzeRepository(repoOwner, repoName);
 
-    // Save to database
-    await saveReport(result);
+    // Save to database. Handled separately so a storage failure isn't reported as a missing repo.
+    try {
+      await saveReport(result);
+    } catch (storageError) {
+      console.error("Failed to save analysis report:", storageError);
+      return NextResponse.json(
+        { error: "Analysis finished but the report could not be saved. Please try again." },
+        { status: 503 }
+      );
+    }
 
     console.log(`Analysis complete for ${repoOwner}/${repoName}, score: ${result.scores.overall}`);
 

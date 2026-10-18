@@ -19,7 +19,7 @@ export default function HomePage() {
 
   if (loading) {
     return (
-      <div className="min-h-[calc(100vh-8rem)] flex items-center justify-center text-muted-foreground">
+      <div className="min-h-[calc(100vh-3.5rem)] flex items-center justify-center text-muted-foreground">
         <Loader2 className="h-8 w-8 animate-spin" />
       </div>
     );
@@ -27,7 +27,7 @@ export default function HomePage() {
 
   if (user) {
     return (
-      <div className="min-h-[calc(100vh-8rem)] flex items-center justify-center text-muted-foreground">
+      <div className="min-h-[calc(100vh-3.5rem)] flex items-center justify-center text-muted-foreground">
         <Loader2 className="h-8 w-8 animate-spin" />
       </div>
     );

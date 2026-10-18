@@ -2,7 +2,8 @@
 const nextConfig = {
   // Performance optimizations
   compiler: {
-    removeConsole: process.env.NODE_ENV === 'production',
+    // Keep errors and warnings so server failures still reach the Vercel logs
+    removeConsole: process.env.NODE_ENV === 'production' ? { exclude: ['error', 'warn'] } : false,
   },
   
   // Image optimization

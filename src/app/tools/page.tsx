@@ -124,7 +124,7 @@ export default function ToolsHubPage() {
   }, [query, activeCategory, favoriteSet]);
 
   return (
-    <section className="min-h-[calc(100vh-8rem)] py-8 md:py-10">
+    <section className="min-h-[calc(100vh-3.5rem)] py-8 md:py-10">
       <div className="container px-4 mx-auto space-y-6">
         <header className="rounded-2xl border bg-card/50 p-5 md:p-7">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">

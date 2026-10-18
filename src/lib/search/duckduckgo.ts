@@ -1,5 +1,7 @@
 // DuckDuckGo Search - Free, no API key needed
 
+const SEARCH_TIMEOUT_MS = 5_000;
+
 export interface SearchResult {
   title: string;
   url: string;
@@ -22,6 +24,8 @@ export async function searchWeb(query: string, maxResults: number = 5): Promise<
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       },
+      // Search runs automatically before replies, so a slow DuckDuckGo must not stall the chat
+      signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -96,7 +100,7 @@ export async function instantAnswer(query: string): Promise<{
     const encodedQuery = encodeURIComponent(query);
     const url = `https://api.duckduckgo.com/?q=${encodedQuery}&format=json&no_html=1`;
     
-    const response = await fetch(url);
+    const response = await fetch(url, { signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS) });
     if (!response.ok) return null;
 
     const data = await response.json();

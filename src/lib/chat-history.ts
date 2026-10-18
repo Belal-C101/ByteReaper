@@ -269,7 +269,7 @@ function mapSessionDocToSession(sessionId: string, data: any, fallbackArchived =
     userId: data.userId,
     userEmail: typeof data.userEmail === 'string' ? data.userEmail : undefined,
     title: data.title ?? sessionId,
-    model: data.model ?? 'auto',
+    model: data.model ?? 'openrouter/auto',
     createdAt: parseFirestoreDate(data.createdAt),
     updatedAt: parseFirestoreDate(data.updatedAt ?? data.archivedAt),
     messageCount: messages.length * 2, // each pair = 2 messages (user + assistant)

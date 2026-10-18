@@ -1,9 +1,10 @@
 import { NextRequest } from 'next/server';
 import { streamAgentMessage, STREAM_MODEL_META_PREFIX, ChatFeatures } from '@/lib/ai/agent';
 import { ChatMessage, FileAttachment } from '@/types/chat';
-import { ModelKey, DEFAULT_MODEL } from '@/lib/ai/gemini';
+import { DEFAULT_MODEL_ID } from '@/lib/ai/models';
 
-export const maxDuration = 60;
+// Free reasoning models can think for minutes; 300s is the Hobby + Fluid compute ceiling
+export const maxDuration = 300;
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,13 +13,13 @@ export async function POST(request: NextRequest) {
       message,
       attachments = [],
       history = [],
-      model = DEFAULT_MODEL,
+      model = DEFAULT_MODEL_ID,
       features = {},
     } = body as {
       message: string;
       attachments?: FileAttachment[];
       history?: ChatMessage[];
-      model?: ModelKey;
+      model?: string;
       features?: ChatFeatures;
     };
 
